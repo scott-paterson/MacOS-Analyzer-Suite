@@ -1,4 +1,4 @@
-﻿# TCC-Analyzer v0.1
+# TCC-Analyzer v0.4
 #
 # @author:    Martin Willing
 # @copyright: Copyright (c) 2025 Martin Willing. All rights reserved. Licensed under the MIT license.
@@ -21,20 +21,34 @@
 # https://github.com/dfinke/ImportExcel
 #
 # jq v1.7.1 (2023-12-13)
-# https://github.com/stedolan/jq
+# https://github.com/jqlang/jq
 #
-# SQLite Tools for Windows v3.50.4 (2025-07-30)
-# https://sqlite.org/download.html --> Command-line tools for Windows x64 --> sqlite-tools-win-x64-3500400.zip
+# SQLite Tools
+# Windows: https://sqlite.org/download.html
+# macOS: Built-in (sqlite3)
 #
 #
 # Changelog:
 # Version 0.1
-# Release Date: 2025-11-10
+# Release Date: 2024-07-18
 # Initial Release
 #
+# Version 0.2
+# Release Date: 2024-08-01
+# Fixed: Minor Bug Fixes and Improvements
 #
-# Tested on Windows 10 Pro (x64) Version 22H2 (10.0.19045.6456) and PowerShell 5.1 (5.1.19041.6456)
-# Tested on Windows 10 Pro (x64) Version 22H2 (10.0.19045.6456) and PowerShell 7.5.4
+# Version 0.3
+# Release Date: 2024-11-20
+# Fixed: Minor Bug Fixes and Improvements
+#
+# Version 0.4
+# Release Date: 2025-12-11
+# Added: Cross-platform support for macOS and Windows
+#
+#
+# Tested on Windows 10 Pro (x64) Version 22H2 (10.0.19045.5011) and target PowerShell version 5.1 (5.1.19041.5007)
+# Tested on Windows 10 Pro (x64) Version 22H2 (10.0.19045.5011) and PowerShell 7.4.6
+# Tested on macOS with PowerShell 7.x
 #
 #
 #############################################################################################################################################################################################
@@ -42,27 +56,27 @@
 
 <#
 .SYNOPSIS
-  TCC-Analyzer v0.1 - Automated Forensic Analysis of macOS TCC database file(s) for DFIR
+  TCC-Analyzer v0.4 - Automated Processing of TCC Database for DFIR
 
 .DESCRIPTION
-  TCC-Analyzer.ps1 is a PowerShell script utilized to simplify the analysis of the macOS TCC.db.
+  TCC-Analyzer.ps1 is a PowerShell script utilized to simplify the processing of the TCC.db database (Transparency, Consent, and Control --> Application permissions) for DFIR.
 
 .PARAMETER OutputDir
-  Specifies the output directory. Default is "$env:USERPROFILE\Desktop\TCC-Analyzer".
+  Specifies the output directory. Default is "$HOME/Desktop/TCC-Analyzer" (macOS) or "$env:USERPROFILE\Desktop\TCC-Analyzer" (Windows).
 
   Note: The subdirectory 'TCC-Analyzer' is automatically created.
 
 .PARAMETER Path
-  Specifies the path to the input directory.
+  Specifies the path to the TCC.db database.
 
 .EXAMPLE
-  PS> .\TCC-Analyzer.ps1
+  PS> ./TCC-Analyzer.ps1
 
 .EXAMPLE
-  PS> .\TCC-Analyzer.ps1 -Path "$env:USERPROFILE\Desktop\tcc_<USERNAME>"
+  PS> ./TCC-Analyzer.ps1 -Path "$HOME/Desktop/TCC.db"
 
 .EXAMPLE
-  PS> .\TCC-Analyzer.ps1 -Path "H:\macos-collector\Aftermath_Collection\tcc_<USERNAME>" -OutputDir "H:\MacOS-Analyzer-Suite"
+  PS> ./TCC-Analyzer.ps1 -Path "/path/to/TCC.db" -OutputDir "/path/to/output"
 
 .NOTES
   Author - Martin Willing
@@ -79,7 +93,8 @@
 [CmdletBinding()]
 Param(
     [String]$Path,
-    [String]$OutputDir
+    [String]$OutputDir,
+    [switch]$NoExcel = $true
 )
 
 #endregion CmdletBinding
@@ -114,55 +129,134 @@ else
     $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Definition
 }
 
-# Output Directory
-if (!($OutputDir))
+# Detect Operating System
+# NOTE: Do NOT use names like IsWindows/IsMacOS/IsLinux here because PowerShell defines read-only automatic variables with those names.
+$script:OnWindows = $false
+$script:OnMacOS   = $false
+$script:OnLinux   = $false
+
+if ($PSVersionTable.PSVersion.Major -ge 6)
 {
-    $script:OUTPUT_FOLDER = "$env:USERPROFILE\Desktop\TCC-Analyzer" # Default
+    $script:OnWindows = $IsWindows
+    $script:OnMacOS   = $IsMacOS
+    $script:OnLinux   = $IsLinux
 }
 else
 {
-    if ($OutputDir -cnotmatch '.+(?=\\)') 
+    # Windows PowerShell 5.1
+    $script:OnWindows = $true
+}
+
+# Excel export toggle (optional)
+$script:EnableExcel = $false
+if (-not $NoExcel -and (Get-Module -ListAvailable -Name ImportExcel))
+{
+    $script:EnableExcel = $true
+}
+
+# Colors / Styling (only supported on Windows)
+$script:UseExcelStyling = $false
+if ($script:OnWindows)
+{
+    Add-Type -AssemblyName System.Drawing
+    $script:Green  = [System.Drawing.Color]::FromArgb(0,176,80)
+    $script:Orange = [System.Drawing.Color]::FromArgb(255,192,0)
+    if ($script:EnableExcel)
+    {
+        $script:UseExcelStyling = $true
+    }
+}
+
+# Output Directory
+if (!($OutputDir))
+{
+    if ($script:OnMacOS -or $script:OnLinux)
+    {
+        $script:OUTPUT_FOLDER = "$HOME/Desktop/TCC-Analyzer"
+    }
+    else
+    {
+        $script:OUTPUT_FOLDER = "$env:USERPROFILE\Desktop\TCC-Analyzer"
+    }
+}
+else
+{
+    # Validate path - accept both Windows and Unix paths
+    if ($OutputDir -cnotmatch '.+(?=[/\\])' -and $OutputDir -notmatch '^[/~]') 
     {
         Write-Host "[Error] You must provide a valid directory path." -ForegroundColor Red
         Exit
     }
     else
     {
-        $script:OUTPUT_FOLDER = "$OutputDir\TCC-Analyzer" # Custom
+        $script:OUTPUT_FOLDER = Join-Path $OutputDir "TCC-Analyzer"
     }
 }
 
 # Tools
 
 # jq
-$script:jq = "$SCRIPT_DIR\Tools\jq\jq-windows-amd64.exe"
+if ($script:OnMacOS -or $script:OnLinux)
+{
+    # Check for jq in PATH (installed via Homebrew or package manager)
+    $script:jq = (Get-Command jq -ErrorAction SilentlyContinue).Source
+    if (-not $script:jq)
+    {
+        $script:jq = "/opt/homebrew/bin/jq"
+        if (-not (Test-Path $script:jq))
+        {
+            $script:jq = "/usr/local/bin/jq"
+        }
+    }
+}
+else
+{
+    $script:jq = "$SCRIPT_DIR\Tools\jq\jq-windows-amd64.exe"
+}
 
 # SQLite3
-$script:SQLite3 = "$SCRIPT_DIR\Tools\SQLite\sqlite3.exe"
+if ($script:OnMacOS -or $script:OnLinux)
+{
+    # Use system sqlite3
+    $script:SQLite3 = (Get-Command sqlite3 -ErrorAction SilentlyContinue).Source
+    if (-not $script:SQLite3)
+    {
+        $script:SQLite3 = "/usr/bin/sqlite3"
+    }
+}
+else
+{
+    $script:SQLite3 = "$SCRIPT_DIR\Tools\SQLite\sqlite3.exe"
+}
 
 # Configuration File (JSON)
-if(!(Test-Path "$PSScriptRoot\Config.json"))
+$ConfigPath = Join-Path $PSScriptRoot "Config.json"
+if(!(Test-Path $ConfigPath))
 {
     Write-Host "[Error] Config.json NOT found." -ForegroundColor Red
     Exit
 }
 else
 {
-    $Config = Get-Content "$PSScriptRoot\Config.json" | ConvertFrom-Json
+    $Config = Get-Content $ConfigPath | ConvertFrom-Json
 
     # BackgroundColor
     if ($Config.ImportExcel.BackgroundColor)
     {
-        if ($Config.ImportExcel.BackgroundColor -cnotmatch '^(([0-1]?[0-9]?[0-9])|([2][0-4][0-9])|(25[0-5])),(([0-1]?[0-9]?[0-9])|([2][0-4][0-9])|(25[0-5])),(([0-1]?[0-9]?[0-9])|([2][0-4][0-9])|(25[0-5]))$') # <0-255>,<0-255>,<0-255>
+        if ($Config.ImportExcel.BackgroundColor -cnotmatch '^(([0-1]?[0-9]?[0-9])|([2][0-4][0-9])|(25[0-5])),(([0-1]?[0-9]?[0-9])|([2][0-4][0-9])|(25[0-5])),(([0-1]?[0-9]?[0-9])|([2][0-4][0-9])|(25[0-5]))$')
         {
             Write-Host "[Error] You must provide a valid RGB Color Code." -ForegroundColor Red
             Return
         }
     }
 
-    # Excel - Color Scheme
-    $script:BackgroundColor = [System.Drawing.Color]$Config.ImportExcel.BackgroundColor
-    $script:FontColor       = $Config.ImportExcel.FontColor
+    # Excel - Color Scheme (only used for styling on Windows)
+    if ($script:UseExcelStyling)
+    {
+        $rgbValues = $Config.ImportExcel.BackgroundColor -split ','
+        $script:BackgroundColor = [System.Drawing.Color]::FromArgb([int]$rgbValues[0], [int]$rgbValues[1], [int]$rgbValues[2])
+        $script:FontColor = $Config.ImportExcel.FontColor
+    }
 }
 
 #endregion Declarations
@@ -172,22 +266,74 @@ else
 
 #region Header
 
+Function Header {
+
 # Windows Title
 $DefaultWindowsTitle = $Host.UI.RawUI.WindowTitle
-$Host.UI.RawUI.WindowTitle = "TCC-Analyzer v0.1 - Automated Forensic Analysis of macOS TCC database file(s) for DFIR"
+$Host.UI.RawUI.WindowTitle = "TCC-Analyzer v0.4 - Automated Processing of TCC Database for DFIR"
 
-# Check if the PowerShell script is being run with admin rights
-if (!([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))
+# Check if the PowerShell script is being run with elevated privileges
+if ($script:OnMacOS -or $script:OnLinux)
 {
-    Write-Host "[Error] This PowerShell script must be run with admin rights." -ForegroundColor Red
+    # On macOS/Linux, check if running as root or with sudo
+    $currentUser = & id -u
+    if ($currentUser -ne "0")
+    {
+        Write-Host "[Warning] This script may require elevated privileges (sudo) for some operations." -ForegroundColor Yellow
+        # Don't exit - allow the script to continue and fail gracefully if needed
+    }
+}
+else
+{
+    # Windows admin check
+    if (!([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))
+    {
+        Write-Host "[Error] This PowerShell script must be run with admin rights." -ForegroundColor Red
+        Exit
+    }
+}
+
+# ImportExcel is optional
+if (-not $script:EnableExcel)
+{
+    if ($NoExcel)
+    {
+        if ($PSBoundParameters.ContainsKey('NoExcel'))
+        {
+            Write-Host "[Info]  -NoExcel specified. XLSX output will be skipped." -ForegroundColor Yellow
+        }
+        else
+        {
+            Write-Host "[Info]  XLSX output is disabled by default. CSV output will be created." -ForegroundColor Yellow
+            Write-Host "[Info]  To enable XLSX (optional): install ImportExcel and run with -NoExcel:`$false" -ForegroundColor Yellow
+        }
+    }
+    else
+    {
+        Write-Host "[Info]  ImportExcel not installed. XLSX output will be skipped." -ForegroundColor Yellow
+        Write-Host "[Info]  Install (optional): Install-Module -Name ImportExcel -Scope CurrentUser" -ForegroundColor Yellow
+    }
+}
+
+# Check if jq exists
+if (!(Test-Path "$($jq)"))
+{
+    Write-Host "[Error] jq NOT found." -ForegroundColor Red
+    if ($script:OnMacOS)
+    {
+        Write-Host "[Info]  Install with: brew install jq" -ForegroundColor Yellow
+    }
+    elseif ($script:OnLinux)
+    {
+        Write-Host "[Info]  Install with: sudo apt install jq" -ForegroundColor Yellow
+    }
     Exit
 }
 
-# Check if PowerShell module 'ImportExcel' is installed
-if (!(Get-Module -ListAvailable -Name ImportExcel))
+# Check if sqlite3 exists
+if (!(Test-Path "$($SQLite3)"))
 {
-    Write-Host "[Error] Please install 'ImportExcel' PowerShell module." -ForegroundColor Red
-    Write-Host "[Info]  Check out: https://github.com/dfinke/ImportExcel"
+    Write-Host "[Error] sqlite3 NOT found." -ForegroundColor Red
     Exit
 }
 
@@ -203,7 +349,7 @@ else
 }
 
 # Function Get-FileSize
-Function Get-FileSize()
+Function script:Get-FileSize
 {
     Param ([long]$Length)
     If ($Length -gt 1TB) {[string]::Format("{0:0.00} TB", $Length / 1TB)}
@@ -214,139 +360,112 @@ Function Get-FileSize()
     Else {""}
 }
 
-Function Test-Csv {
-
-<#
-.SYNOPSIS
-  Test-Csv - Fast Check if CSV is NOT empty
-
-.DESCRIPTION
-  The Test-Csv cmdlet checks if the rows of your CSV file are NOT empty.
-
-.PARAMETER Path
-  Specifies the path to the CSV file.
-
-.PARAMETER MaxLines
-  Specifies the maximum of lines to read from CSV file.
-
-.PARAMETER NoHeader (Optional)
-  If this switch is specified, function will NOT skip first line of the file. 
-
-.EXAMPLE
-  Test-Csv -Path <CSV> -MaxLines 2
-
-.EXAMPLE
-  Test-Csv -Path <CSV> -MaxLines 1 -NoHeader
-
-.NOTES
-  Author - Martin Willing
-
-.LINK
-  https://lethal-forensics.com/
-#>
-
-Param
-(
-    [Parameter(Mandatory = $true, ValueFromPipeline = $true, ValueFromPipelineByPropertyName = $true)]
-    [string]$Path,
-
-    [Parameter(Mandatory = $true, ValueFromPipelineByPropertyName = $true)]
-    [ValidateRange(1, [int]::MaxValue)]
-    [int]$MaxLines,
-
-    [Parameter(ValueFromPipelineByPropertyName = $true)]
-    [switch]$NoHeader
-)
-
-Begin
-{
-    $Quotes    = '"'
-    $Delimiter = ','
-    $Regex     = "$Delimiter(?=(?:[^$Quotes]|$Quotes[^$Quotes]*$Quotes)*$)"
-}
-
-Process
-{
-    $Reader = New-Object -TypeName System.IO.StreamReader -ArgumentList $Path -ErrorAction Stop
-
-    $CsvRawLinesCount  = 0
-    $CsvDataLinesCount = 0
-
-    while($null -ne ($Line = $Reader.ReadLine()))
+# macOS file picker (Explorer-like) via osascript
+Function script:Select-FileMacOS {
+    param(
+        [string]$Prompt = "Choose a file"
+    )
+    try
     {
-        $CsvRawLinesCount++
-
-        if(!$NoHeader -and ($CsvRawLinesCount -eq 1))
-        {
-            continue
-        }
-
-        if($CsvRawLinesCount -gt $MaxLines)
-        {
-            break
-        }
-
-        if($Line -match $Regex)
-        {
-            $CsvDataLinesCount++
-        }
+        $escapedPrompt = $Prompt.Replace('"','\"')
+        $result = & osascript -e "POSIX path of (choose file with prompt `"$escapedPrompt`")" 2>$null
+        if ([string]::IsNullOrWhiteSpace($result)) { return $null }
+        return ($result.Trim())
+    }
+    catch
+    {
+        return $null
     }
 }
 
-End
-{
-    $Reader.Close()
-    $Reader.Dispose()
-
-    if($CsvDataLinesCount -gt 0)
-    {
-        $true
-    }
-    else
-    {
-        $false
-    }
-}
-
-}
-
-# Select Log File (TCC.db)
+# Select TCC Database
 if(!($Path))
 {
-    Function Get-LogFile($InitialDirectory)
-    { 
-        [System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms") | Out-Null
-        $OpenFileDialog = New-Object System.Windows.Forms.OpenFileDialog
-        $OpenFileDialog.InitialDirectory = $InitialDirectory
-        $OpenFileDialog.Filter = "TCC Database|tcc_*|All Files (*.*)|*.*"
-        $OpenFileDialog.ShowDialog()
-        $OpenFileDialog.Filename
-        $OpenFileDialog.ShowHelp = $true
-        $OpenFileDialog.Multiselect = $false
-    }
-
-    $Result = Get-LogFile
-
-    if($Result -eq "OK")
+    if ($script:OnWindows)
     {
-        $script:DatabaseFile = $Result[1]
+        # Windows - Use OpenFileDialog
+        Add-Type -AssemblyName System.Windows.Forms
+        Function Get-Database($InitialDirectory)
+        { 
+            [System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms") | Out-Null
+            $OpenFileDialog = New-Object System.Windows.Forms.OpenFileDialog
+            $OpenFileDialog.InitialDirectory = $InitialDirectory
+            $OpenFileDialog.Filter = "TCC Database|TCC.db|All Files (*.*)|*.*"
+            $OpenFileDialog.ShowDialog()
+            $OpenFileDialog.Filename
+            $OpenFileDialog.ShowHelp = $true
+            $OpenFileDialog.Multiselect = $false
+        }
+
+        $Result = Get-Database
+
+        if($Result -eq "OK")
+        {
+            $script:DatabaseFile = $Result[1]
+        }
+        else
+        {
+            $Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
+            Exit
+        }
     }
     else
     {
-        $Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
-        Exit
+        if ($script:OnMacOS)
+        {
+            $picked = Select-FileMacOS -Prompt "Select TCC.db"
+            if ($picked)
+            {
+                $script:DatabaseFile = $picked
+            }
+            else
+            {
+                Write-Host ""
+                Write-Host "[Info]  Please provide the path to the TCC.db database file." -ForegroundColor Cyan
+                Write-Host "[Info]  Common locations:" -ForegroundColor Cyan
+                Write-Host "        - /Library/Application Support/com.apple.TCC/TCC.db (System)" -ForegroundColor Gray
+                Write-Host "        - ~/Library/Application Support/com.apple.TCC/TCC.db (User)" -ForegroundColor Gray
+                Write-Host ""
+                $script:DatabaseFile = Read-Host "Enter path to TCC.db"
+            }
+        }
+        else
+        {
+            # Linux - Prompt for path
+            Write-Host ""
+            Write-Host "[Info]  Please provide the path to the TCC.db database file." -ForegroundColor Cyan
+            Write-Host ""
+            $script:DatabaseFile = Read-Host "Enter path to TCC.db"
+        }
+        
+        if ([string]::IsNullOrWhiteSpace($script:DatabaseFile))
+        {
+            Write-Host "[Error] No path provided." -ForegroundColor Red
+            Exit
+        }
+        
+        # Expand ~ to home directory
+        if ($script:DatabaseFile.StartsWith("~"))
+        {
+            $script:DatabaseFile = $script:DatabaseFile.Replace("~", $HOME)
+        }
     }
 }
 else
 {
     $script:DatabaseFile = $Path
+    # Expand ~ to home directory
+    if ($script:DatabaseFile.StartsWith("~"))
+    {
+        $script:DatabaseFile = $script:DatabaseFile.Replace("~", $HOME)
+    }
 }
 
 # Create a record of your PowerShell session to a text file
-Start-Transcript -Path "$OUTPUT_FOLDER\Transcript.txt"
+Start-Transcript -Path "$OUTPUT_FOLDER/Transcript.txt"
 
 # Get Start Time
-$startTime = (Get-Date)
+$script:startTime = (Get-Date)
 
 # Logo
 $Logo = @"
@@ -363,7 +482,7 @@ Write-Output "$Logo"
 Write-Output ""
 
 # Header
-Write-Output "TCC-Analyzer v0.1 - Automated Forensic Analysis of macOS TCC database file(s) for DFIR"
+Write-Output "TCC-Analyzer v0.4 - Automated Processing of TCC Database for DFIR"
 Write-Output "(c) 2025 Martin Willing at Lethal-Forensics (https://lethal-forensics.com/)"
 Write-Output ""
 
@@ -372,6 +491,8 @@ $AnalysisDate = [datetime]::Now.ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss"
 Write-Output "Analysis date: $AnalysisDate UTC"
 Write-Output ""
 
+}
+
 #endregion Header
 
 #############################################################################################################################################################################################
@@ -379,25 +500,14 @@ Write-Output ""
 
 #region Analysis
 
-# TCC - Transparency, Consent, and Control (macOS)
+# TCC Database
+# Location: /Library/Application Support/com.apple.TCC/TCC.db (System)
+# Location: ~/Library/Application Support/com.apple.TCC/TCC.db (User)
 
-# A framework for regulating applications permissions by managing their access to user data.
+Function TCC {
 
-# TCC Database(s)
-
-# System-wide database
-# /Library/Application Support/com.apple.TCC/TCC.db --> global one (root-level)
-
-# User-specific database
-# /Users/<username>/Library/Applicatio0n Support/com.apple.TCC/TCC.db (per-user)
-
-# Note: These TCC datbase(s) are protected from editing with SIP (System Integrity Protection), but you can read them by granting your terminal application or editor full disk access.
-
-# Aftermath Source:
-# Aftermath_Collection\Aftermath_<SERIAL_NUMBER>.zip\Artifatcs\raw\tcc_<USERNAME>
-
-# Check if Database File exists
-if (!(Test-Path "$($DatabaseFile)"))
+# Input-Check
+if (!(Test-Path "$DatabaseFile" -PathType Leaf))
 {
     Write-Host "[Error] $DatabaseFile does not exist." -ForegroundColor Red
     Write-Host ""
@@ -406,37 +516,24 @@ if (!(Test-Path "$($DatabaseFile)"))
     Exit
 }
 
-# Check Signature (Magic Number)
-if ($PSEdition -eq "Core")
+# Check File Extension
+$Extension = [IO.Path]::GetExtension($DatabaseFile)
+if (!($Extension -eq ".db" ))
 {
-    $Bytes = (Get-Content -Path $DatabaseFile -AsByteStream -ReadCount 1 -TotalCount 16) # PowerShell 7
-}
-else
-{
-    $Bytes = (Get-Content -Path $DatabaseFile -Encoding Byte -ReadCount 1 -TotalCount 16) # PowerShell 5.1
-}
-
-$Signature = ([System.BitConverter]::ToString($Bytes)).Replace("-"," ") # SQLite format 3
-
-if (!($Signature -eq "53 51 4c 69 74 65 20 66 6f 72 6d 61 74 20 33 00")) # Magic Bytes
-{
-    Write-Host "[Error] No SQLite3 Database File provided." -ForegroundColor Red
-    Stop-Transcript
-    $Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
-    Exit
-}
-
-# Check if sqlite3.exe exists
-if (!(Test-Path "$($SQLite3)"))
-{
-    Write-Host "[Error] sqlite3.exe NOT found." -ForegroundColor Red
+    Write-Host "[Error] No TCC.db provided." -ForegroundColor Red
+    Write-Host ""
     Stop-Transcript
     $Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
     Exit
 }
 
 $FileName = [IO.Path]::GetFileName($DatabaseFile)
-Write-Output "[Info]  Processing Transparency, Consent, and Control Database ($FileName) ..."
+Write-Output "[Info]  Processing TCC Database ($FileName) ..."
+New-Item "$OUTPUT_FOLDER/CSV" -ItemType Directory -Force | Out-Null
+if ($script:EnableExcel)
+{
+    New-Item "$OUTPUT_FOLDER/XLSX" -ItemType Directory -Force | Out-Null
+}
 
 # MD5 Hash
 $MD5 = (Get-FileHash -LiteralPath "$DatabaseFile" -Algorithm MD5).Hash
@@ -450,223 +547,187 @@ Write-Output "[Info]  SHA1 Hash: $SHA1"
 $SHA256 = (Get-FileHash -LiteralPath "$DatabaseFile" -Algorithm SHA256).Hash
 Write-Output "[Info]  SHA256 Hash: $SHA256"
 
-# Input Size
-$InputSize = Get-FileSize((Get-Item "$DatabaseFile").Length)
-Write-Output "[Info]  Total Input Size: $InputSize"
+# File Size
+$FileSize = Get-FileSize((Get-Item "$DatabaseFile").Length)
+Write-Output "[Info]  File Size: $FileSize"
 
-# Count Rows of SQLite3 Database (w/ thousands separators)
-[int]$Count = (& $SQLite3 -readonly $DatabaseFile 'SELECT COUNT(*) FROM ACCESS')
-$Rows = '{0:N0}' -f $Count
-Write-Output "[Info]  Total Lines: $Rows"
+# Copy TCC.db to Output Directory
+Copy-Item -Path "$DatabaseFile" -Destination "$OUTPUT_FOLDER/TCC.db"
 
-# Processing TCC.db
-New-Item "$OUTPUT_FOLDER\CSV" -ItemType Directory -Force | Out-Null
-New-Item "$OUTPUT_FOLDER\XLSX" -ItemType Directory -Force | Out-Null
+# SQLite
+# Get SQLite Metadata
+$Name            = & $SQLite3 -readonly "$OUTPUT_FOLDER/TCC.db" "SELECT name FROM sqlite_master WHERE type='table' AND name='access';" 2>&1 # access
+$Database        = & $SQLite3 -readonly "$OUTPUT_FOLDER/TCC.db" "PRAGMA database_list;" 2>&1 # main
+$SchemaVersion   = & $SQLite3 -readonly "$OUTPUT_FOLDER/TCC.db" "PRAGMA main.schema_version;" 2>&1 # 25
+$ApplicationID   = & $SQLite3 -readonly "$OUTPUT_FOLDER/TCC.db" "PRAGMA main.application_id;" 2>&1 # 0
+$UserVersion     = & $SQLite3 -readonly "$OUTPUT_FOLDER/TCC.db" "PRAGMA user_version;" 2>&1 # user_version = TCC.db Version (7-22)
+$Encoding        = & $SQLite3 -readonly "$OUTPUT_FOLDER/TCC.db" "PRAGMA encoding;" 2>&1 # UTF-8
+$JournalMode     = & $SQLite3 -readonly "$OUTPUT_FOLDER/TCC.db" "PRAGMA journal_mode;" 2>&1 # wal
+$IntegrityCheck  = & $SQLite3 -readonly "$OUTPUT_FOLDER/TCC.db" "PRAGMA integrity_check;" 2>&1 # ok
 
-# ACCESS Table
+Write-Output "[Info]  TCC.db Version: $UserVersion (PRAGMA user_version)"
 
-# CSV
-& $SQLite3 -readonly -header -csv $DatabaseFile 'SELECT * FROM ACCESS' | Out-File "$OUTPUT_FOLDER\CSV\Untouched.csv" -Encoding UTF8
+# Column Header Check
+$ColumnHeaderCheck = & $SQLite3 -readonly "$OUTPUT_FOLDER/TCC.db" "PRAGMA table_info(access);"
 
-# Count columns of 'Untouched.csv' --> Track Changes --> Adjust SQL Query if needed
-[int]$Columns = ((Get-Content "$OUTPUT_FOLDER\CSV\Untouched.csv")[1] -split ",").Count
-if ($Columns -ne 17)
+# TCC.db (UserVersion 7-16)
+if ($UserVersion -lt 17)
 {
-    Write-Host "[Info]  $Columns columns found (17 columns expected). Please check ACCESS Table." -ForegroundColor Red
+    # Get Data
+    $Query = "SELECT service,client,client_type,auth_value,auth_reason,indirect_object_identifier FROM access;"
+    $Data = (& $SQLite3 -separator ',' -readonly "$OUTPUT_FOLDER/TCC.db" "$Query" 2>&1) -replace "^", "Service,Client,Client Type,Authorization Value,Authorization Reason,Indirect Object Identifier`n" | ConvertFrom-Csv
+}
+# TCC.db (UserVersion 17-21)
+elseif (($UserVersion -gt 16) -And ($UserVersion -lt 22))
+{
+    # Get Data
+    $Query = "SELECT service,client,client_type,auth_value,auth_reason,indirect_object_identifier,last_modified FROM access;"
+    $Data = (& $SQLite3 -separator ',' -readonly "$OUTPUT_FOLDER/TCC.db" "$Query" 2>&1) -replace "^", "Service,Client,Client Type,Authorization Value,Authorization Reason,Indirect Object Identifier,Last Modified`n" | ConvertFrom-Csv
+}
+# TCC.db (UserVersion 22+)
+elseif ($UserVersion -gt 21)
+{
+    # Get Data
+    $Query = "SELECT service,client,client_type,auth_value,auth_reason,indirect_object_identifier,last_modified,pid_version,boot_uuid FROM access;"
+    $Data = (& $SQLite3 -separator ',' -readonly "$OUTPUT_FOLDER/TCC.db" "$Query" 2>&1) -replace "^", "Service,Client,Client Type,Authorization Value,Authorization Reason,Indirect Object Identifier,Last Modified,PID Version,Boot UUID`n" | ConvertFrom-Csv
 }
 
-# macOS 15.3.2 = 17 columns
+# Count Records
+$Count = ($Data | Measure-Object).Count
+Write-Output "[Info]  Processing $Count records ..."
 
-# XLSX
-if (Test-Path "$OUTPUT_FOLDER\CSV\Untouched.csv")
+# Get TCC-Services.csv
+$TCC_Services_Path = Join-Path $SCRIPT_DIR "Config/TCC-Services.csv"
+if (Test-Path "$TCC_Services_Path")
 {
-    if(Test-Csv -Path "$OUTPUT_FOLDER\CSV\Untouched.csv" -MaxLines 2)
+    $TCC_Services = Import-Csv "$TCC_Services_Path" -Delimiter "," -Encoding UTF8
+}
+
+# Processing data
+$Results = [Collections.Generic.List[PSObject]]::new()
+ForEach($Record in $Data)
+{
+    # Service
+    $ServiceValue = $Record.Service
+
+    # Client
+    $Client = $Record.Client
+
+    # Client_Type
+    $Client_Type_Value = $Record.'Client Type'
+    switch($Client_Type_Value)
     {
-        $IMPORT = Import-Csv "$OUTPUT_FOLDER\CSV\Untouched.csv" -Delimiter ","
-        $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER\XLSX\Untouched.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Access" -CellStyleSB {
-        param($WorkSheet)
-        # BackgroundColor and FontColor for specific cells of TopRow
-        $ColumnNumber = $WorkSheet.Dimension.End.Column
-        $ColumnName = (Get-ExcelColumnName $ColumnNumber).ColumnName
-        Set-Format -Address $WorkSheet.Cells["A1:$($ColumnName)1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-        # HorizontalAlignment "Center" of columns A-Q
-        $WorkSheet.Cells["A:$($ColumnName)"].Style.HorizontalAlignment="Center"
-        }
+        "0"     { $Client_Type = "0 - BundleID" }
+        "1"     { $Client_Type = "1 - Absolute Path" }
+        default { $Client_Type = "$Client_Type_Value - Unknown" }
     }
-}
 
-# SQL Query
-$SQL = 
-"
-SELECT 
-	DATETIME(last_modified,'UNIXEPOCH') AS 'Last Modified',
-	service AS 'Service',
-	client AS 'Name',
-	CASE auth_value 
-		WHEN 0 THEN 'Denied'
-		WHEN 1 THEN 'Unknown'
-		WHEN 2 THEN 'Allowed'
-		WHEN 3 THEN 'Limited'
-        WHEN 4 THEN 'Add Only'
-        WHEN 5 THEN 'Single Boot Allowed' -- allowed for a unique boot_uuid
-	END AS 'Auth Value',
-	CASE auth_reason
-        WHEN 0 THEN 'Inherited'
-		WHEN 1 THEN 'Error'
-		WHEN 2 THEN 'User Consent'
-		WHEN 3 THEN 'User Set'
-		WHEN 4 THEN 'System Set'
-		WHEN 5 THEN 'Service Policy'
-		WHEN 6 THEN 'MDM Policy'
-		WHEN 7 THEN 'Override Policy'
-		WHEN 8 THEN 'Missing Usage String'
-		WHEN 9 THEN 'Prompt Timeout'
-		WHEN 10 THEN 'Preflight Unknown'
-		WHEN 11 THEN 'Entitled'
-		WHEN 12 THEN 'App Type Policy'
-		END AS 'Auth Reason',
-    CASE client_type
-        WHEN 0 THEN 'Bundle Identifier'
-        WHEN 1 THEN 'Absolute Path'
-    END AS 'Client Type'
-FROM ACCESS
-"
+    # Authorization Value
+    $Auth_Value = $Record.'Authorization Value'
+    switch($Auth_Value)
+    {
+        "0" { $Authorization_Value = "0 - Access Denied" }
+        "1" { $Authorization_Value = "1 - Unknown" }
+        "2" { $Authorization_Value = "2 - Access Allowed" }
+        "3" { $Authorization_Value = "3 - Access Limited" }
+        "4" { $Authorization_Value = "4 - Access Limited" }
+        default { $Authorization_Value = "$Auth_Value - Unknown" }
+    }
 
-# Execute SQL Query
-$Results = @(& $SQLite3 -readonly -separator '**' $DatabaseFile $SQL |
-ConvertFrom-String -Delimiter '\u002A\u002A' -PropertyNames "Last Modified","Service","Name","Auth Value","Auth Reason","Client Type")
+    # Authorization Reason
+    $Auth_Reason = $Record.'Authorization Reason'
+    switch($Auth_Reason)
+    {
+        "0"  { $Authorization_Reason = "0 - Unknown" }
+        "1"  { $Authorization_Reason = "1 - Error" }
+        "2"  { $Authorization_Reason = "2 - User Consent" }
+        "3"  { $Authorization_Reason = "3 - User Set" }
+        "4"  { $Authorization_Reason = "4 - System Set" }
+        "5"  { $Authorization_Reason = "5 - Service Policy" }
+        "6"  { $Authorization_Reason = "6 - MDM Policy" }
+        "7"  { $Authorization_Reason = "7 - Override Policy" }
+        "8"  { $Authorization_Reason = "8 - Missing Usage String" }
+        "9"  { $Authorization_Reason = "9 - Prompt Timeout" }
+        "10" { $Authorization_Reason = "10 - Preflight Unknown" }
+        "11" { $Authorization_Reason = "11 - Entitled" }
+        "12" { $Authorization_Reason = "12 - App Type Policy" }
+        default { $Authorization_Reason = "$Auth_Reason - Unknown" }
+    }
 
-# CSV
-$Output = [Collections.Generic.List[PSObject]]::new()
-ForEach($Record in $Results)
-{
-    $CreatedDateTime = $Record | Select-Object -ExpandProperty "Last Modified"
+    # Indirect Object Identifier
+    $IndirectObjectIdentifier = $Record.'Indirect Object Identifier'
+
+    # Last Modified
+    if ($Record.'Last Modified')
+    {
+        $LastModified = $Record.'Last Modified'
+        $EpochDate = [DateTime]"1/1/1970"
+        $TimeZone = [TimeZoneInfo]::FindSystemTimeZoneById('UTC')
+        $Last_Modified_UTC = [TimeZoneInfo]::ConvertTimeFromUtc($EpochDate.AddSeconds($LastModified), $TimeZone).ToString("yyyy-MM-dd HH:mm:ss")
+    }
+    else
+    {
+        $Last_Modified_UTC = ""
+    }
+
+    # PID Version
+    $PIDVersion = $Record.'PID Version'
+
+    # Boot UUID
+    $BootUUID = $Record.'Boot UUID'
+
+    # Client --> Service Name
+    $ServiceName = ($TCC_Services | Where-Object {$_.Service -eq "$ServiceValue"}).'Service Name'
+
+    # Client --> Description
+    $Description = ($TCC_Services | Where-Object {$_.Service -eq "$ServiceValue"}).Description
 
     $Line = [PSCustomObject]@{
-    "Last Modified" = (Get-Date $CreatedDateTime).ToString("yyyy-MM-dd HH:mm:ss") 
-    "Service"       = $Record.Service
-    "Name"          = $Record.Name
-    "Auth Value"    = $Record."Auth Value"
-    "Auth Reason"   = $Record."Auth Reason"
-    "Client Type"   = $Record."Client Type"
+        "Service"                       = $ServiceValue
+        "Service Name"                  = $ServiceName
+        "Client"                        = $Client
+        "Client Type"                   = $Client_Type
+        "Authorization Value"           = $Authorization_Value
+        "Authorization Reason"          = $Authorization_Reason
+        "Indirect Object Identifier"    = $IndirectObjectIdentifier
+        "Last Modified (UTC)"           = $Last_Modified_UTC
+        "PID Version"                   = $PIDVersion
+        "Boot UUID"                     = $BootUUID
+        "Description"                   = $Description
     }
 
-    $Output.Add($Line)
+    $Results.Add($Line)
 }
 
-$Output | Export-Csv -Path "$OUTPUT_FOLDER\CSV\TCC.csv" -NoTypeInformation -Encoding UTF8
+$Results | Export-Csv -Path "$OUTPUT_FOLDER/CSV/TCC.csv" -NoTypeInformation -Encoding UTF8
 
 # XLSX
-if (Test-Path "$OUTPUT_FOLDER\CSV\TCC.csv")
+if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/CSV/TCC.csv"))
 {
-    if(Test-Csv -Path "$OUTPUT_FOLDER\CSV\TCC.csv" -MaxLines 2)
+    if ((Get-Item "$OUTPUT_FOLDER/CSV/TCC.csv").Length -gt 0)
     {
-        $IMPORT = Import-Csv "$OUTPUT_FOLDER\CSV\TCC.csv" -Delimiter "," -Encoding UTF8 | Sort-Object { $_."Last Modified" -as [datetime] } -Descending
-        $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER\XLSX\TCC.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "TCC" -CellStyleSB {
+        $Import = Import-Csv "$OUTPUT_FOLDER/CSV/TCC.csv" -Delimiter ","
+        $Import | Export-Excel -Path "$OUTPUT_FOLDER/XLSX/TCC.xlsx" -NoNumberConversion * -FreezePane 2,5 -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "TCC" -CellStyleSB {
         param($WorkSheet)
-        # BackgroundColor and FontColor for specific cells of TopRow
-        Set-Format -Address $WorkSheet.Cells["A1:F1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-        # HorizontalAlignment "Center" of columns A-F
-        $WorkSheet.Cells["A:F"].Style.HorizontalAlignment="Center"
+        if ($script:UseExcelStyling)
+        {
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:K1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-F and H-J
+            $WorkSheet.Cells["A:F"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["H:J"].Style.HorizontalAlignment="Center"
+        }
         }
     }
 }
 
 # File Size (XLSX)
-if (Test-Path "$OUTPUT_FOLDER\XLSX\TCC.xlsx")
+if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/XLSX/TCC.xlsx"))
 {
-    $Size = Get-FileSize((Get-Item "$OUTPUT_FOLDER\XLSX\TCC.xlsx").Length)
+    $Size = Get-FileSize((Get-Item "$OUTPUT_FOLDER/XLSX/TCC.xlsx").Length)
     Write-Output "[Info]  File Size (XLSX): $Size"
 }
 
-# Create HashTable and import 'TCC-Services.csv'
-$Services_HashTable = @{}
-if (Test-Path "$SCRIPT_DIR\Config\TCC-Services.csv")
-{
-    if(Test-Csv -Path "$SCRIPT_DIR\Config\TCC-Services.csv" -MaxLines 2)
-    {
-        Import-Csv "$SCRIPT_DIR\Config\TCC-Services.csv" -Delimiter "," -Encoding UTF8 | ForEach-Object { $Services_HashTable[$_.Service] = $_.Description,$_.Category }
-
-        # Count Ingested Properties
-        $Count = $Services_HashTable.Count
-        Write-Output "[Info]  Initializing 'TCC-Services.csv' Lookup Table ($Count) ..."
-    }
-}
-
-# Extended
-if (Test-Path "$OUTPUT_FOLDER\CSV\TCC.csv")
-{
-    if(Test-Csv -Path "$OUTPUT_FOLDER\CSV\TCC.csv" -MaxLines 2)
-    {
-        $Records = Import-Csv -Path "$OUTPUT_FOLDER\CSV\TCC.csv" -Delimiter "," -Encoding UTF8
-
-        # CSV
-        $Results = [Collections.Generic.List[PSObject]]::new()
-
-        ForEach($Record in $Records)
-        {
-            # Service
-            $Service = $Record.Service
-
-            # Check if HashTable contains Service
-            if($Services_HashTable.ContainsKey("$Service"))
-            {
-                $Description = $Services_HashTable["$Service"][0]
-                $Category    = $Services_HashTable["$Service"][1]
-            }
-            else
-            {
-                $Description = "Unknown"
-                $Category    = "Unknown"
-            }
-
-            $Line = [PSCustomObject]@{
-                "Last Modified" = $Record."Last Modified" 
-                "Service"       = $Record.Service
-                "Description"   = $Description
-                "Category"      = $Category
-                "Name"          = $Record."Name"
-                "Auth Value"    = $Record."Auth Value"
-                "Auth Reason"   = $Record."Auth Reason"
-                "Client Type"   = $Record."Client Type"
-            }
-
-            $Results.Add($Line)
-        }
-
-        $Results | Export-Csv -Path "$OUTPUT_FOLDER\CSV\TCC-Extended.csv" -NoTypeInformation -Encoding UTF8
-    }
-}
-
-# XLSX
-if (Test-Path "$OUTPUT_FOLDER\CSV\TCC-Extended.csv")
-{
-    if(Test-Csv -Path "$OUTPUT_FOLDER\CSV\TCC-Extended.csv" -MaxLines 2)
-    {
-        $IMPORT = Import-Csv "$OUTPUT_FOLDER\CSV\TCC-Extended.csv" -Delimiter "," -Encoding UTF8 | Sort-Object { $_."Last Modified" -as [datetime] } -Descending
-        $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER\XLSX\TCC-Extended.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "TCC" -CellStyleSB {
-        param($WorkSheet)
-        # BackgroundColor and FontColor for specific cells of TopRow
-        Set-Format -Address $WorkSheet.Cells["A1:H1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-        # HorizontalAlignment "Center" of columns A-B, D and F-H
-        $WorkSheet.Cells["A:B"].Style.HorizontalAlignment="Center"
-        $WorkSheet.Cells["D:D"].Style.HorizontalAlignment="Center"
-        $WorkSheet.Cells["F:H"].Style.HorizontalAlignment="Center"
-        }
-    }
-}
-
-# Ckeck for "Unknown" Services
-if (Test-Path "$OUTPUT_FOLDER\CSV\TCC-Extended.csv")
-{
-    if(Test-Csv -Path "$OUTPUT_FOLDER\CSV\TCC-Extended.csv" -MaxLines 2)
-    {
-        $Unknown = (Import-Csv -Path "$OUTPUT_FOLDER\CSV\TCC-Extended.csv" -Delimiter "," | Where-Object { $_."Service" -eq "Unknown" } | Measure-Object).Count
-        if ($Unknown -ge 1)
-        {
-            Write-Host "[Info]  'Unknown' Service found. Please check and update 'TCC-Services.csv' database." -ForegroundColor Red
-        }
-    }
 }
 
 #endregion Analysis
@@ -674,468 +735,248 @@ if (Test-Path "$OUTPUT_FOLDER\CSV\TCC-Extended.csv")
 #############################################################################################################################################################################################
 #############################################################################################################################################################################################
 
-#region Statistics
-
-# Stats
-New-Item "$OUTPUT_FOLDER\Stats" -ItemType Directory -Force | Out-Null
-
-# Time Frame
-$TCC = Import-Csv -Path "$OUTPUT_FOLDER\CSV\TCC.csv" -Delimiter "," -Encoding UTF8 | Sort-Object { $_."Last Modified" -as [datetime] }
-$LastModified = $TCC | Select-Object "Last Modified"
-$StartDateTime = $LastModified | Select-Object -First 1 | Select-Object -ExpandProperty "Last Modified"
-$EndDateTime = $LastModified | Select-Object -Last 1 | Select-Object -ExpandProperty "Last Modified"
-Write-Output "[Info]  Log data from $StartDateTime UTC until $EndDateTime UTC"
-
-# TCC Permissions
-$Count = (Import-Csv -Path "$OUTPUT_FOLDER\CSV\TCC.csv" -Delimiter "," | Select-Object Service | Measure-Object).Count
-$Permissions = '{0:N0}' -f $Count
-Write-Output "[Info]  $Permissions TCC Permissions found"
-
-# User Consent + Allowed
-$Total = (Import-Csv -Path "$OUTPUT_FOLDER\CSV\TCC.csv" -Delimiter "," | Where-Object { $_."Auth Reason" -eq "User Consent" } | Measure-Object).Count
-$Count = (Import-Csv -Path "$OUTPUT_FOLDER\CSV\TCC.csv" -Delimiter "," | Where-Object { $_."Auth Reason" -eq "User Consent" } | Where-Object { $_."Auth Value" -eq "Allowed" } | Measure-Object).Count
-Write-Output "[Info]  $Count TCC Permissions allowed by User ($Total)"
-
-# User Consent + Denied
-$Total = (Import-Csv -Path "$OUTPUT_FOLDER\CSV\TCC.csv" -Delimiter "," | Where-Object { $_."Auth Reason" -eq "User Consent" } | Measure-Object).Count
-$Count = (Import-Csv -Path "$OUTPUT_FOLDER\CSV\TCC.csv" -Delimiter "," | Where-Object { $_."Auth Reason" -eq "User Consent" } | Where-Object { $_."Auth Value" -eq "Denied" } | Measure-Object).Count
-Write-Output "[Info]  $Count TCC Permissions denied by User ($Total)"
-
-# Service (Stats)
-$Total = (Import-Csv -Path "$OUTPUT_FOLDER\CSV\TCC.csv" -Delimiter "," | Select-Object Service | Measure-Object).Count
-$Count = (Import-Csv -Path "$OUTPUT_FOLDER\CSV\TCC.csv" -Delimiter "," | Select-Object Service -Unique | Measure-Object).Count
-$Service = '{0:N0}' -f $Count
-Write-Output "[Info]  $Service TCC Services found ($Total)"
-
-if ($Total -ge "1")
-{
-    $Stats = Import-Csv -Path "$OUTPUT_FOLDER\CSV\TCC.csv" -Delimiter "," | Group-Object Service | Select-Object @{Name='Service'; Expression={ $_.Values[0] }},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Total)}} | Sort-Object Count -Descending
-    $Stats | Export-Excel -Path "$OUTPUT_FOLDER\Stats\Service.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Service" -CellStyleSB {
-    param($WorkSheet)
-    # BackgroundColor and FontColor for specific cells of TopRow
-    Set-Format -Address $WorkSheet.Cells["A1:C1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-    # HorizontalAlignment "Center" of columns B-C
-    $WorkSheet.Cells["B:C"].Style.HorizontalAlignment="Center"
-    }
-}
-
-# Service / Description (Stats)
-$Total = (Import-Csv -Path "$OUTPUT_FOLDER\CSV\TCC-Extended.csv" -Delimiter "," | Select-Object Service | Measure-Object).Count
-
-if ($Total -ge "1")
-{
-    $Stats = Import-Csv -Path "$OUTPUT_FOLDER\CSV\TCC-Extended.csv" -Delimiter "," | Group-Object Service,Description | Select-Object @{Name='Service'; Expression={ $_.Values[0] }},@{Name='Description'; Expression={ $_.Values[1] }},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Total)}} | Sort-Object Count -Descending
-    $Stats | Export-Excel -Path "$OUTPUT_FOLDER\Stats\Service-Extended.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Services" -CellStyleSB {
-    param($WorkSheet)
-    # BackgroundColor and FontColor for specific cells of TopRow
-    Set-Format -Address $WorkSheet.Cells["A1:D1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-    # HorizontalAlignment "Center" of columns C-D
-    $WorkSheet.Cells["C:D"].Style.HorizontalAlignment="Center"
-    }
-}
-
-# Auth Value (Stats)
-$Total = (Import-Csv -Path "$OUTPUT_FOLDER\CSV\TCC.csv" -Delimiter "," | Select-Object "Auth Value" | Measure-Object).Count
-
-if ($Total -ge "1")
-{
-    $Stats = Import-Csv -Path "$OUTPUT_FOLDER\CSV\TCC.csv" -Delimiter "," | Group-Object "Auth Value" | Select-Object @{Name='Auth Value'; Expression={ $_.Values[0] }},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Total)}} | Sort-Object Count -Descending
-    $Stats | Export-Excel -Path "$OUTPUT_FOLDER\Stats\Auth-Value.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Auth Value" -CellStyleSB {
-    param($WorkSheet)
-    # BackgroundColor and FontColor for specific cells of TopRow
-    Set-Format -Address $WorkSheet.Cells["A1:C1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-    # HorizontalAlignment "Center" of columns A-C
-    $WorkSheet.Cells["A:C"].Style.HorizontalAlignment="Center"
-    }
-}
-
-# Auth Reason (Stats)
-$Total = (Import-Csv -Path "$OUTPUT_FOLDER\CSV\TCC.csv" -Delimiter "," | Select-Object "Auth Reason" | Measure-Object).Count
-
-if ($Total -ge "1")
-{
-    $Stats = Import-Csv -Path "$OUTPUT_FOLDER\CSV\TCC.csv" -Delimiter "," | Group-Object "Auth Reason" | Select-Object @{Name='Auth Reason'; Expression={ $_.Values[0] }},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Total)}} | Sort-Object Count -Descending
-    $Stats | Export-Excel -Path "$OUTPUT_FOLDER\Stats\Auth-Reason.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Auth Reason" -CellStyleSB {
-    param($WorkSheet)
-    # BackgroundColor and FontColor for specific cells of TopRow
-    Set-Format -Address $WorkSheet.Cells["A1:C1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-    # HorizontalAlignment "Center" of columns A-C
-    $WorkSheet.Cells["A:C"].Style.HorizontalAlignment="Center"
-    }
-}
-
-# Auth Reason / Auth Value (Stats)
-$Total = (Import-Csv -Path "$OUTPUT_FOLDER\CSV\TCC.csv" -Delimiter "," | Where-Object {$_."Auth Reason" -ne ""}| Measure-Object).Count
-
-if ($Total -ge "1")
-{
-    $Stats = Import-Csv -Path "$OUTPUT_FOLDER\CSV\TCC.csv" -Delimiter "," -Encoding UTF8 | Group-Object "Auth Reason","Auth Value" | Select-Object @{Name='Auth Reason'; Expression={ $_.Values[0] }},@{Name='Auth Value'; Expression={ $_.Values[1] }},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Total)}} | Sort-Object Count -Descending
-    $Stats | Export-Excel -Path "$OUTPUT_FOLDER\Stats\AuthReason-AuthValue.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Auth Reason - Auth Value" -CellStyleSB {
-    param($WorkSheet)
-    # BackgroundColor and FontColor for specific cells of TopRow
-    Set-Format -Address $WorkSheet.Cells["A1:D1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-    # HorizontalAlignment "Center" of columns A-D
-    $WorkSheet.Cells["A:D"].Style.HorizontalAlignment="Center"
-    }
-}
-
-# Client Type (Stats)
-$Total = (Import-Csv -Path "$OUTPUT_FOLDER\CSV\TCC.csv" -Delimiter "," | Where-Object {$_."Client Type" -ne ""}| Measure-Object).Count
-
-if ($Total -ge "1")
-{
-    $Stats = Import-Csv -Path "$OUTPUT_FOLDER\CSV\TCC.csv" -Delimiter "," | Group-Object "Client Type" | Select-Object @{Name='Client Type'; Expression={ $_.Values[0] }},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Total)}} | Sort-Object Count -Descending
-    $Stats | Export-Excel -Path "$OUTPUT_FOLDER\Stats\ClientType.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Client Type" -CellStyleSB {
-    param($WorkSheet)
-    # BackgroundColor and FontColor for specific cells of TopRow
-    Set-Format -Address $WorkSheet.Cells["A1:C1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-    # HorizontalAlignment "Center" of columns A-C
-    $WorkSheet.Cells["A:C"].Style.HorizontalAlignment="Center"
-    }
-}
-
-# Exclude Apple System Processes
-$NonApple = Import-Csv -Path "$OUTPUT_FOLDER\CSV\TCC-Extended.csv" -Delimiter "," -Encoding UTF8 | Where-Object { $_."Name" -notmatch "^com.apple.*$" }
-$Total = ($NonApple | Measure-Object).Count
-$Count = ($NonApple | Sort-Object Name -Unique | Measure-Object).Count
-Write-Output "[Info]  $Count Third-Party Application(s) found ($Total)"
-
-if ($Total -ge 1)
-{
-    $NonApple | Export-Excel -Path "$OUTPUT_FOLDER\XLSX\TCC-ThirdParty.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "3rd-Party Apps" -CellStyleSB {
-    param($WorkSheet)
-    # BackgroundColor and FontColor for specific cells of TopRow
-    Set-Format -Address $WorkSheet.Cells["A1:H1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-    # HorizontalAlignment "Center" of columns A-B and D-H
-    $WorkSheet.Cells["A:B"].Style.HorizontalAlignment="Center"
-    $WorkSheet.Cells["D:H"].Style.HorizontalAlignment="Center"
-    }
-}
-
-# Permissions Count by Name (Bundle Identifier)
-$Stats = Import-Csv -Path "$OUTPUT_FOLDER\CSV\TCC.csv" -Delimiter "," -Encoding UTF8 | Group-Object "Name" | Select-Object @{Name='Name'; Expression={ $_.Values[0] }},@{Name='Permissions'; Expression={ $_.Count }} | Sort-Object Permissions -Descending
-$Stats | Export-Excel -Path "$OUTPUT_FOLDER\Stats\Permissions.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Permissions" -CellStyleSB {
-param($WorkSheet)
-# BackgroundColor and FontColor for specific cells of TopRow
-Set-Format -Address $WorkSheet.Cells["A1:B1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-# HorizontalAlignment "Center" of column B
-$WorkSheet.Cells["B:B"].Style.HorizontalAlignment="Center"
-# ConditionalFormatting - Permissions requested by Bundle Identifier >= 5
-$LastRow = $WorkSheet.Dimension.End.Row
-Add-ConditionalFormatting -Address $WorkSheet.Cells["B2:B$LastRow"] -WorkSheet $WorkSheet -RuleType GreaterThan -ConditionValue 4 -BackgroundColor "Red"
-}
-
-# Count of Permissions by Name >= 5
-[int]$Count = ($Stats | Where-Object { $_."Permissions" -ge "5" } | Measure-Object).Count
-if ($Count -ge 1)
-{
-    Write-Host "[Alert] Suspicious Application(s) detected: >=5 Application Permissions requested ($Count)" -ForegroundColor Yellow
-}
-
-# Bundle Identifier
-if (Test-Path "$OUTPUT_FOLDER\CSV\TCC.csv")
-{
-    if(Test-Csv -Path "$OUTPUT_FOLDER\CSV\TCC.csv" -MaxLines 2)
-    {
-        New-Item "$OUTPUT_FOLDER\TXT" -ItemType Directory -Force | Out-Null
-        $BundleIds = (Import-Csv "$OUTPUT_FOLDER\CSV\TCC.csv" -Delimiter "," -Encoding UTF8 | Where-Object { $_."Client Type" -eq "Bundle Identifier" } | Where-Object { $_."Name" -notmatch "^com.apple.*$" } | Select-Object "Name" -Unique | Sort-Object "Name")."Name"
-        $BundleIds | Out-File "$OUTPUT_FOLDER\TXT\BundleIds.txt" -Encoding UTF8
-    }
-}
-
-#endregion Statistics
-
-#############################################################################################################################################################################################
-#############################################################################################################################################################################################
-
-#region AppStore
-
-Function Get-iTunesInfo {
+#region iTunes
 
 # iTunes Search API
-# https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/iTuneSearchAPI/LookupExamples.html
-$Total = (Get-Content "$OUTPUT_FOLDER\TXT\BundleIds.txt" | Measure-Object).Count
-$BundleIds = Get-Content "$OUTPUT_FOLDER\TXT\BundleIds.txt"
+# https://affiliate.itunes.apple.com/resources/documentation/itunes-store-web-service-search-api/
+# https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/iTuneSearchAPI/index.html
+# https://itunes.apple.com/lookup?bundleId=com.skype.skype&country=US
 
-# Internet Connectivity Check
-$NetworkListManager = [Activator]::CreateInstance([Type]::GetTypeFromCLSID([Guid]‘{DCB00C01-570F-4A9B-8D69-199FDBA5723B}’)).IsConnectedToInternet
+# Note: The bundleId is a unique identifier for an app on the App Store. The limit is set to one result per query.
 
-# Offline
-if (!($NetworkListManager -eq "True"))
+Function Get-AppInfo {
+
+# Check Internet connectivity
+if ($script:OnMacOS -or $script:OnLinux)
 {
-    Write-Host "[Error] Your computer is NOT connected to the Internet." -ForegroundColor Red
+    $Connected = Test-Connection -ComputerName "itunes.apple.com" -Count 1 -Quiet -ErrorAction SilentlyContinue
+}
+else
+{
+    $Connected = (Test-NetConnection -ComputerName "itunes.apple.com" -Port 443).TcpTestSucceeded
 }
 
-# Online
-if ($NetworkListManager -eq "True")
+if ($Connected -eq $true)
 {
-    # Check if itunes.apple.com is reachable
-    if ((Test-NetConnection -ComputerName itunes.apple.com -Port 443).TcpTestSucceeded)
+    if (Test-Path "$OUTPUT_FOLDER/CSV/TCC.csv")
     {
-        # Estimated Time (Average: 12 requests per minute)
-        [int]$TotalSeconds = $Total / 0.2
-        $TimeSpan = [TimeSpan]::FromSeconds($TotalSeconds)
-        $EstimatedTime = ('{1} min {2} sec' -f $TimeSpan.Hours, $TimeSpan.Minutes, $TimeSpan.Seconds)
+        # Data
+        $Data = Import-Csv "$OUTPUT_FOLDER/CSV/TCC.csv" -Delimiter ","
 
-        Write-Output "[Info]  Data Enrichment w/ iTunes Search API ($Total) ..."
-        Write-Output "[Info]  Estimated Time: $EstimatedTime ..."
-        New-Item "$OUTPUT_FOLDER\iTunes-Lookup\JSON" -ItemType Directory -Force | Out-Null
+        # Count Bundle IDs
+        $BundleIDs = ($Data | Select-Object Client -Unique | Measure-Object).Count
 
-        # https://itunes.apple.com/lookup?bundleId=$BundleId
+        # Initializing Progress
+        $i = 0
 
-        # Apple Store DE
-        # https://itunes.apple.com/de/lookup?bundleId=$BundleId
-        # https://itunes.apple.com/lookup?bundleId=$BundleId&country=de
-        $Country = "de" # ISO Country Code (ISO 3166-1 alpha-2) - https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2
-
-        # Österreich: at
-        # Schweiz: ch
-        # USA: us
-
-        Foreach ($BundleId in $BundleIds)
+        $Results = [Collections.Generic.List[PSObject]]::new()
+        ForEach($Record in $Data)
         {
-            $iTunesUrl = "https://itunes.apple.com/lookup?bundleId=$BundleId&country=$Country"
-            $Response = Invoke-WebRequest -Uri $iTunesUrl
-            $Response.Content | & $jq . | Out-File "$OUTPUT_FOLDER\iTunes-Lookup\JSON\$BundleId.json"
-            Start-Sleep -Seconds 5
-        }
+            $Client = $Record.Client
 
-        # CSV
-        Write-Output "[Info]  Creating iTunes Search Report ..."
-        Get-ChildItem -Recurse -Force -ErrorAction SilentlyContinue "$OUTPUT_FOLDER\iTunes-Lookup\JSON" | Foreach-Object FullName | Foreach-Object {
-
-            $FilePath = $_
-                
-            if ((Get-Item "$FilePath").Length -gt 0kb)
+            # Increment Progress Indicator
+            $i++
+            $percent = 0
+            if ([int]$BundleIDs -gt 0)
             {
-                $bundleId  = $_ | ForEach-Object{($_ -split "\\")[-1]} | ForEach-Object{($_ -split "\.json")[0]}
-                $trackName = & $jq -r '.results[0].trackName' "$FilePath" 2> $null
-
-                if ("$trackName" -eq "null")
-                {
-                    $trackName = ""
-                }
-
-                $trackId = & $jq -r '.results[0].trackId' "$FilePath" 2> $null
-
-                if ("$trackId" -eq "null")
-                {
-                    $trackId = ""
-                }
-
-                $artistName = & $jq -r '.results[0].artistName' "$FilePath" 2> $null
-
-                if ("$artistName" -eq "null")
-                {
-                    $artistName = ""
-                }
-
-                $artistId = & $jq -r '.results[0].artistId' "$FilePath" 2> $null
-
-                if ("$artistId" -eq "null")
-                {
-                    $artistId = ""
-                }
-
-                $description = & $jq -r '.results[0].description' "$FilePath" 2> $null
-
-                if ("$description" -eq "null")
-                {
-                    $description = ""
-                }
-
-                $sellerUrl = & $jq -r '.results[0].sellerUrl' "$FilePath" 2> $null
-
-                if ("$sellerUrl" -eq "null")
-                {
-                    $sellerUrl = ""
-                }
-
-                $trackViewUrl = & $jq -r '.results[0].trackViewUrl' "$FilePath" 2> $null
-
-                if ("$trackViewUrl" -eq "null")
-                {
-                    $trackViewUrl = ""
-                }
-
-                $formattedPrice = & $jq -r '.results[0].formattedPrice' "$FilePath" 2> $null
-
-                if ("$formattedPrice" -eq "null")
-                {
-                    $formattedPrice = ""
-                }
-
-                $currency = & $jq -r '.results[0].currency' "$FilePath" 2> $null
-
-                if ("$currency" -eq "null")
-                {
-                    $currency = ""
-                }
-
-                $primaryGenreName = & $jq -r '.results[0].primaryGenreName' "$FilePath" 2> $null
-
-                if ("$primaryGenreName" -eq "null")
-                {
-                    $primaryGenreName = ""
-                }
-
-                $primaryGenreId = & $jq -r '.results[0].primaryGenreId' "$FilePath" 2> $null
-
-                if ("$primaryGenreId" -eq "null")
-                {
-                    $primaryGenreId = ""
-                }
-
-                $genres = & $jq -r '.results[0].genres[]?' "$FilePath" 2> $null
-
-                if ("$genres" -eq "null")
-                {
-                    $genres = ""
-                }
-
-                $genreIds = & $jq -r '.results[0].genreIds[]?' "$FilePath" 2> $null
-
-                if ("$genreIds" -eq "null")
-                {
-                    $genreIds = ""
-                }
-
-                $languageCodesISO2A = & $jq -r '.results[0].languageCodesISO2A[]?' "$FilePath" 2> $null
-
-                if ("$languageCodesISO2A" -eq "null")
-                {
-                    $languageCodesISO2A = ""
-                }
-
-                $contentAdvisoryRating = & $jq -r '.results[0].contentAdvisoryRating' "$FilePath" 2> $null
-
-                if ("$contentAdvisoryRating" -eq "null")
-                {
-                    $contentAdvisoryRating = ""
-                }
-
-                $averageUserRating = & $jq -r '.results[0].averageUserRating' "$FilePath" 2> $null
-
-                if ("$averageUserRating" -eq "null")
-                {
-                    $averageUserRating = ""
-                }
-
-                $userRatingCount = & $jq -r '.results[0].userRatingCount' "$FilePath" 2> $null
-
-                if ("$userRatingCount" -eq "null")
-                {
-                    $userRatingCount = ""
-                }
-
-                $releaseDate = & $jq -r '.results[0].releaseDate' "$FilePath" 2> $null
-
-                if ("$releaseDate" -eq "null")
-                {
-                    $releaseDate = ""
-                }
-
-
-                $currentVersionReleaseDate = & $jq -r '.results[0].currentVersionReleaseDate' "$FilePath" 2> $null
-
-                if ("$currentVersionReleaseDate" -eq "null")
-                {
-                    $currentVersionReleaseDate = ""
-                }
-
-                $version = & $jq -r '.results[0].version' "$FilePath" 2> $null
-
-                if ("$version" -eq "null")
-                {
-                    $version = ""
-                }
-
-                $minimumOsVersion = & $jq -r '.results[0].minimumOsVersion' "$FilePath" 2> $null
-
-                if ("$minimumOsVersion" -eq "null")
-                {
-                    $minimumOsVersion = ""
-                }
-
-                $fileSizeBytes = & $jq -r '.results[0].fileSizeBytes' "$FilePath" 2> $null
-
-                if ("$fileSizeBytes" -eq "null")
-                {
-                    $fileSizeBytes = ""
-                }
-
-                $FileSize = Get-FileSize($fileSizeBytes)
+                $percent = [int][Math]::Min(100, [Math]::Floor(($i / [double]$BundleIDs) * 100))
             }
+            Write-Progress -Activity "Processing BundleID" -Status "$i of $BundleIDs" -PercentComplete $percent
 
-            New-Object –TypeName PSObject -Property ([ordered]@{
-                "Bundle Identifier"         = $bundleId
-                "Application Name"          = $trackName
-                "App ID"                    = $trackId
-                "Developer"                 = $artistName
-                "Developer ID"              = $artistId
-                "Description"               = $description | Out-String
-                "Support URL"               = $sellerUrl
-                "App Store URL"             = $trackViewUrl
-                "Price"                     = $formattedPrice
-                "Currency"                  = $currency
-                "Primary Category"          = $primaryGenreName
-                "Primary Category ID"       = $primaryGenreId
-                "Categories"                = ($genres) -join ", "
-                "Category IDs"              = ($genreIds) -join ", "
-                "Languages"                 = ($languageCodesISO2A) -join ", "
-                "Content Rating"            = $contentAdvisoryRating
-                "Average Rating"            = $averageUserRating
-                "UserRatingCount"           = $userRatingCount
-                "Release Date"              = $releaseDate
-                "Last Updated"              = $currentVersionReleaseDate
-                "Current Version"           = $version
-                "Minimum OS Version"        = $minimumOsVersion
-                "Bytes"                     = $fileSizeBytes
-                "File Size"                 = $FileSize
-            })
-
-        } | ConvertTo-Csv -Delimiter "," -NoTypeInformation | Out-File "$OUTPUT_FOLDER\iTunes-Lookup\iTunes-Report.csv"
-
-        # XLSX
-        if (Get-Module -ListAvailable -Name ImportExcel)
-        {
-            if (Test-Path "$OUTPUT_FOLDER\iTunes-Lookup\iTunes-Report.csv")
+            if ($Client -like "*.*")
             {
-                if(Test-Csv -Path "$OUTPUT_FOLDER\CSV\TCC-Extended.csv" -MaxLines 2)
+                $BundleID = $Record.Client
+
+                try
                 {
-                    $IMPORT = Import-Csv "$OUTPUT_FOLDER\iTunes-Lookup\iTunes-Report.csv" -Delimiter "," -Encoding UTF8
-                    $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER\iTunes-Lookup\iTunes-Report.xlsx" -NoNumberConversion * -NoHyperLinkConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Report" -CellStyleSB {
-                    param($WorkSheet)
-                    # BackgroundColor and FontColor for specific cells of TopRow
-                    Set-Format -Address $WorkSheet.Cells["A1:X1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-                    # HorizontalAlignment "Center" of columns B-E and G-X
-                    $WorkSheet.Cells["B:E"].Style.HorizontalAlignment="Center"
-                    $WorkSheet.Cells["G:X"].Style.HorizontalAlignment="Center"
+                    $Response = Invoke-RestMethod -Uri "https://itunes.apple.com/lookup?bundleId=$BundleID&country=US" -Method Get -ErrorAction SilentlyContinue
+                    $ResultCount = $Response.resultCount
+
+                    if ($ResultCount -gt 0)
+                    {
+                        $ArtistName = $Response.results.artistName
+                        $TrackName = $Response.results.trackName
+                    }
+                    else
+                    {
+                        $ArtistName = ""
+                        $TrackName = ""
                     }
                 }
+                catch
+                {
+                    $ArtistName = ""
+                    $TrackName = ""
+                }
             }
+            else
+            {
+                $BundleID = ""
+                $ArtistName = ""
+                $TrackName = ""
+            }
+
+            $Line = [PSCustomObject]@{
+                "Service"                       = $Record.Service
+                "Service Name"                  = $Record.'Service Name'
+                "Client"                        = $Record.Client
+                "Client Type"                   = $Record.'Client Type'
+                "Authorization Value"           = $Record.'Authorization Value'
+                "Authorization Reason"          = $Record.'Authorization Reason'
+                "Indirect Object Identifier"    = $Record.'Indirect Object Identifier'
+                "Last Modified (UTC)"           = $Record.'Last Modified (UTC)'
+                "PID Version"                   = $Record.'PID Version'
+                "Boot UUID"                     = $Record.'Boot UUID'
+                "Description"                   = $Record.Description
+                "iTunes - Artist Name"          = $ArtistName
+                "iTunes - Track Name"           = $TrackName
+            }
+
+            $Results.Add($Line)
         }
 
-        # App Store Apps
-        $Count = (Import-Csv -Path "$OUTPUT_FOLDER\iTunes-Lookup\iTunes-Report.csv" -Delimiter "," -Encoding UTF8 | Where-Object { $_."App ID" -ne "" } | Measure-Object).Count
-        Write-Output "[Info]  $Count Application(s) on Apple App Store found ($Total)"
+        $Results | Export-Csv -Path "$OUTPUT_FOLDER/CSV/TCC_iTunes.csv" -NoTypeInformation -Encoding UTF8
+
+        # XLSX
+        if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/CSV/TCC_iTunes.csv"))
+        {
+            if ((Get-Item "$OUTPUT_FOLDER/CSV/TCC_iTunes.csv").Length -gt 0)
+            {
+                $Import = Import-Csv "$OUTPUT_FOLDER/CSV/TCC_iTunes.csv" -Delimiter ","
+                $Import | Export-Excel -Path "$OUTPUT_FOLDER/XLSX/TCC_iTunes.xlsx" -NoNumberConversion * -FreezePane 2,5 -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "TCC" -CellStyleSB {
+                param($WorkSheet)
+                if ($script:UseExcelStyling)
+                {
+                    # BackgroundColor and FontColor for specific cells of TopRow
+                    Set-Format -Address $WorkSheet.Cells["A1:M1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+                    # HorizontalAlignment "Center" of columns A-F and H-J
+                    $WorkSheet.Cells["A:F"].Style.HorizontalAlignment="Center"
+                    $WorkSheet.Cells["H:J"].Style.HorizontalAlignment="Center"
+                }
+                }
+            }
+        }
     }
-    else
+}
+else
+{
+    Write-Host "[Info]  Skipping iTunes lookup (No Internet connectivity)" -ForegroundColor Yellow
+}
+
+}
+
+#endregion iTunes
+
+#############################################################################################################################################################################################
+#############################################################################################################################################################################################
+
+#region Stats
+
+Function Get-Stats {
+
+# Create Stats directory
+New-Item "$OUTPUT_FOLDER/Stats" -ItemType Directory -Force | Out-Null
+
+if (Test-Path "$OUTPUT_FOLDER/CSV/TCC.csv")
+{
+    $Data = Import-Csv "$OUTPUT_FOLDER/CSV/TCC.csv" -Delimiter ","
+    $Total = ($Data | Measure-Object).Count
+
+    # Client (Stats)
+    if ($Total -ge 1)
     {
-        Write-Host "[Error] itunes.apple.com is NOT reachable. Please check your network connection and try again." -ForegroundColor Red
+        $Stats = $Data | Group-Object Client | Select-Object @{Name='Client'; Expression={if($_.Name){$_.Name}else{'N/A'}}},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Total)}} | Sort-Object Count -Descending
+        if ($script:EnableExcel)
+        {
+            $Stats | Export-Excel -Path "$OUTPUT_FOLDER/Stats/Client.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Client" -CellStyleSB {
+            param($WorkSheet)
+            if ($script:UseExcelStyling)
+            {
+                Set-Format -Address $WorkSheet.Cells["A1:C1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+                $WorkSheet.Cells["B:C"].Style.HorizontalAlignment="Center"
+            }
+            }
+        }
+        else
+        {
+            $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/Client.csv" -NoTypeInformation -Encoding UTF8
+        }
+    }
+
+    # Service (Stats)
+    if ($Total -ge 1)
+    {
+        $Stats = $Data | Group-Object Service | Select-Object @{Name='Service'; Expression={if($_.Name){$_.Name}else{'N/A'}}},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Total)}} | Sort-Object Count -Descending
+        if ($script:EnableExcel)
+        {
+            $Stats | Export-Excel -Path "$OUTPUT_FOLDER/Stats/Service.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Service" -CellStyleSB {
+            param($WorkSheet)
+            if ($script:UseExcelStyling)
+            {
+                Set-Format -Address $WorkSheet.Cells["A1:C1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+                $WorkSheet.Cells["B:C"].Style.HorizontalAlignment="Center"
+            }
+            }
+        }
+        else
+        {
+            $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/Service.csv" -NoTypeInformation -Encoding UTF8
+        }
+    }
+
+    # Authorization Value (Stats)
+    if ($Total -ge 1)
+    {
+        $Stats = $Data | Group-Object "Authorization Value" | Select-Object @{Name='Authorization Value'; Expression={if($_.Name){$_.Name}else{'N/A'}}},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Total)}} | Sort-Object Count -Descending
+        if ($script:EnableExcel)
+        {
+            $Stats | Export-Excel -Path "$OUTPUT_FOLDER/Stats/AuthorizationValue.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "AuthorizationValue" -CellStyleSB {
+            param($WorkSheet)
+            if ($script:UseExcelStyling)
+            {
+                Set-Format -Address $WorkSheet.Cells["A1:C1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+                $WorkSheet.Cells["A:C"].Style.HorizontalAlignment="Center"
+            }
+            }
+        }
+        else
+        {
+            $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/AuthorizationValue.csv" -NoTypeInformation -Encoding UTF8
+        }
+    }
+
+    # Authorization Reason (Stats)
+    if ($Total -ge 1)
+    {
+        $Stats = $Data | Group-Object "Authorization Reason" | Select-Object @{Name='Authorization Reason'; Expression={if($_.Name){$_.Name}else{'N/A'}}},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Total)}} | Sort-Object Count -Descending
+        if ($script:EnableExcel)
+        {
+            $Stats | Export-Excel -Path "$OUTPUT_FOLDER/Stats/AuthorizationReason.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "AuthorizationReason" -CellStyleSB {
+            param($WorkSheet)
+            if ($script:UseExcelStyling)
+            {
+                Set-Format -Address $WorkSheet.Cells["A1:C1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+                $WorkSheet.Cells["A:C"].Style.HorizontalAlignment="Center"
+            }
+            }
+        }
+        else
+        {
+            $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/AuthorizationReason.csv" -NoTypeInformation -Encoding UTF8
+        }
     }
 }
 
 }
 
-Get-iTunesInfo
-
-#endregion AppStore
+#endregion Stats
 
 #############################################################################################################################################################################################
 #############################################################################################################################################################################################
 
 #region Footer
+
+Function Footer {
 
 # Get End Time
 $endTime = (Get-Date)
@@ -1153,250 +994,51 @@ Write-Host ""
 Stop-Transcript
 Start-Sleep 0.5
 
-# Reset Progress Preference
-$Global:ProgressPreference = $OriginalProgressPreference
+# Show completion message
+if ($script:OnWindows)
+{
+    # Windows - Use MessageBox
+    Add-Type -AssemblyName System.Windows.Forms
+    $MessageBody = "Status: TCC Analysis completed."
+    $MessageTitle = "TCC-Analyzer.ps1 (https://lethal-forensics.com/)"
+    $ButtonType = "OK"
+    $MessageIcon = "Information"
+    $Result = [System.Windows.Forms.MessageBox]::Show($MessageBody, $MessageTitle, $ButtonType, $MessageIcon)
 
-# Reset Windows Title
-$Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
+    if ($Result -eq "OK" ) 
+    {
+        $Global:ProgressPreference = $OriginalProgressPreference
+        $Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
+        Exit
+    }
+}
+else
+{
+    # macOS/Linux - Console message
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Green
+    Write-Host "  TCC Analysis completed successfully!  " -ForegroundColor Green
+    Write-Host "========================================" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "Output directory: $OUTPUT_FOLDER" -ForegroundColor Cyan
+    Write-Host ""
+    
+    $Global:ProgressPreference = $OriginalProgressPreference
+}
+
+}
 
 #endregion Footer
 
 #############################################################################################################################################################################################
 #############################################################################################################################################################################################
 
-# SIG # Begin signature block
-# MIIrywYJKoZIhvcNAQcCoIIrvDCCK7gCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
-# gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUx4LZV4edB6wGyYvPNGKyNSLH
-# mlKggiUEMIIFbzCCBFegAwIBAgIQSPyTtGBVlI02p8mKidaUFjANBgkqhkiG9w0B
-# AQwFADB7MQswCQYDVQQGEwJHQjEbMBkGA1UECAwSR3JlYXRlciBNYW5jaGVzdGVy
-# MRAwDgYDVQQHDAdTYWxmb3JkMRowGAYDVQQKDBFDb21vZG8gQ0EgTGltaXRlZDEh
-# MB8GA1UEAwwYQUFBIENlcnRpZmljYXRlIFNlcnZpY2VzMB4XDTIxMDUyNTAwMDAw
-# MFoXDTI4MTIzMTIzNTk1OVowVjELMAkGA1UEBhMCR0IxGDAWBgNVBAoTD1NlY3Rp
-# Z28gTGltaXRlZDEtMCsGA1UEAxMkU2VjdGlnbyBQdWJsaWMgQ29kZSBTaWduaW5n
-# IFJvb3QgUjQ2MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAjeeUEiIE
-# JHQu/xYjApKKtq42haxH1CORKz7cfeIxoFFvrISR41KKteKW3tCHYySJiv/vEpM7
-# fbu2ir29BX8nm2tl06UMabG8STma8W1uquSggyfamg0rUOlLW7O4ZDakfko9qXGr
-# YbNzszwLDO/bM1flvjQ345cbXf0fEj2CA3bm+z9m0pQxafptszSswXp43JJQ8mTH
-# qi0Eq8Nq6uAvp6fcbtfo/9ohq0C/ue4NnsbZnpnvxt4fqQx2sycgoda6/YDnAdLv
-# 64IplXCN/7sVz/7RDzaiLk8ykHRGa0c1E3cFM09jLrgt4b9lpwRrGNhx+swI8m2J
-# mRCxrds+LOSqGLDGBwF1Z95t6WNjHjZ/aYm+qkU+blpfj6Fby50whjDoA7NAxg0P
-# OM1nqFOI+rgwZfpvx+cdsYN0aT6sxGg7seZnM5q2COCABUhA7vaCZEao9XOwBpXy
-# bGWfv1VbHJxXGsd4RnxwqpQbghesh+m2yQ6BHEDWFhcp/FycGCvqRfXvvdVnTyhe
-# Be6QTHrnxvTQ/PrNPjJGEyA2igTqt6oHRpwNkzoJZplYXCmjuQymMDg80EY2NXyc
-# uu7D1fkKdvp+BRtAypI16dV60bV/AK6pkKrFfwGcELEW/MxuGNxvYv6mUKe4e7id
-# FT/+IAx1yCJaE5UZkADpGtXChvHjjuxf9OUCAwEAAaOCARIwggEOMB8GA1UdIwQY
-# MBaAFKARCiM+lvEH7OKvKe+CpX/QMKS0MB0GA1UdDgQWBBQy65Ka/zWWSC8oQEJw
-# IDaRXBeF5jAOBgNVHQ8BAf8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB/zATBgNVHSUE
-# DDAKBggrBgEFBQcDAzAbBgNVHSAEFDASMAYGBFUdIAAwCAYGZ4EMAQQBMEMGA1Ud
-# HwQ8MDowOKA2oDSGMmh0dHA6Ly9jcmwuY29tb2RvY2EuY29tL0FBQUNlcnRpZmlj
-# YXRlU2VydmljZXMuY3JsMDQGCCsGAQUFBwEBBCgwJjAkBggrBgEFBQcwAYYYaHR0
-# cDovL29jc3AuY29tb2RvY2EuY29tMA0GCSqGSIb3DQEBDAUAA4IBAQASv6Hvi3Sa
-# mES4aUa1qyQKDKSKZ7g6gb9Fin1SB6iNH04hhTmja14tIIa/ELiueTtTzbT72ES+
-# BtlcY2fUQBaHRIZyKtYyFfUSg8L54V0RQGf2QidyxSPiAjgaTCDi2wH3zUZPJqJ8
-# ZsBRNraJAlTH/Fj7bADu/pimLpWhDFMpH2/YGaZPnvesCepdgsaLr4CnvYFIUoQx
-# 2jLsFeSmTD1sOXPUC4U5IOCFGmjhp0g4qdE2JXfBjRkWxYhMZn0vY86Y6GnfrDyo
-# XZ3JHFuu2PMvdM+4fvbXg50RlmKarkUT2n/cR/vfw1Kf5gZV6Z2M8jpiUbzsJA8p
-# 1FiAhORFe1rYMIIGFDCCA/ygAwIBAgIQeiOu2lNplg+RyD5c9MfjPzANBgkqhkiG
-# 9w0BAQwFADBXMQswCQYDVQQGEwJHQjEYMBYGA1UEChMPU2VjdGlnbyBMaW1pdGVk
-# MS4wLAYDVQQDEyVTZWN0aWdvIFB1YmxpYyBUaW1lIFN0YW1waW5nIFJvb3QgUjQ2
-# MB4XDTIxMDMyMjAwMDAwMFoXDTM2MDMyMTIzNTk1OVowVTELMAkGA1UEBhMCR0Ix
-# GDAWBgNVBAoTD1NlY3RpZ28gTGltaXRlZDEsMCoGA1UEAxMjU2VjdGlnbyBQdWJs
-# aWMgVGltZSBTdGFtcGluZyBDQSBSMzYwggGiMA0GCSqGSIb3DQEBAQUAA4IBjwAw
-# ggGKAoIBgQDNmNhDQatugivs9jN+JjTkiYzT7yISgFQ+7yavjA6Bg+OiIjPm/N/t
-# 3nC7wYUrUlY3mFyI32t2o6Ft3EtxJXCc5MmZQZ8AxCbh5c6WzeJDB9qkQVa46xiY
-# Epc81KnBkAWgsaXnLURoYZzksHIzzCNxtIXnb9njZholGw9djnjkTdAA83abEOHQ
-# 4ujOGIaBhPXG2NdV8TNgFWZ9BojlAvflxNMCOwkCnzlH4oCw5+4v1nssWeN1y4+R
-# laOywwRMUi54fr2vFsU5QPrgb6tSjvEUh1EC4M29YGy/SIYM8ZpHadmVjbi3Pl8h
-# JiTWw9jiCKv31pcAaeijS9fc6R7DgyyLIGflmdQMwrNRxCulVq8ZpysiSYNi79tw
-# 5RHWZUEhnRfs/hsp/fwkXsynu1jcsUX+HuG8FLa2BNheUPtOcgw+vHJcJ8HnJCrc
-# UWhdFczf8O+pDiyGhVYX+bDDP3GhGS7TmKmGnbZ9N+MpEhWmbiAVPbgkqykSkzyY
-# Vr15OApZYK8CAwEAAaOCAVwwggFYMB8GA1UdIwQYMBaAFPZ3at0//QET/xahbIIC
-# L9AKPRQlMB0GA1UdDgQWBBRfWO1MMXqiYUKNUoC6s2GXGaIymzAOBgNVHQ8BAf8E
-# BAMCAYYwEgYDVR0TAQH/BAgwBgEB/wIBADATBgNVHSUEDDAKBggrBgEFBQcDCDAR
-# BgNVHSAECjAIMAYGBFUdIAAwTAYDVR0fBEUwQzBBoD+gPYY7aHR0cDovL2NybC5z
-# ZWN0aWdvLmNvbS9TZWN0aWdvUHVibGljVGltZVN0YW1waW5nUm9vdFI0Ni5jcmww
-# fAYIKwYBBQUHAQEEcDBuMEcGCCsGAQUFBzAChjtodHRwOi8vY3J0LnNlY3RpZ28u
-# Y29tL1NlY3RpZ29QdWJsaWNUaW1lU3RhbXBpbmdSb290UjQ2LnA3YzAjBggrBgEF
-# BQcwAYYXaHR0cDovL29jc3Auc2VjdGlnby5jb20wDQYJKoZIhvcNAQEMBQADggIB
-# ABLXeyCtDjVYDJ6BHSVY/UwtZ3Svx2ImIfZVVGnGoUaGdltoX4hDskBMZx5NY5L6
-# SCcwDMZhHOmbyMhyOVJDwm1yrKYqGDHWzpwVkFJ+996jKKAXyIIaUf5JVKjccev3
-# w16mNIUlNTkpJEor7edVJZiRJVCAmWAaHcw9zP0hY3gj+fWp8MbOocI9Zn78xvm9
-# XKGBp6rEs9sEiq/pwzvg2/KjXE2yWUQIkms6+yslCRqNXPjEnBnxuUB1fm6bPAV+
-# Tsr/Qrd+mOCJemo06ldon4pJFbQd0TQVIMLv5koklInHvyaf6vATJP4DfPtKzSBP
-# kKlOtyaFTAjD2Nu+di5hErEVVaMqSVbfPzd6kNXOhYm23EWm6N2s2ZHCHVhlUgHa
-# C4ACMRCgXjYfQEDtYEK54dUwPJXV7icz0rgCzs9VI29DwsjVZFpO4ZIVR33LwXyP
-# DbYFkLqYmgHjR3tKVkhh9qKV2WCmBuC27pIOx6TYvyqiYbntinmpOqh/QPAnhDge
-# xKG9GX/n1PggkGi9HCapZp8fRwg8RftwS21Ln61euBG0yONM6noD2XQPrFwpm3Gc
-# uqJMf0o8LLrFkSLRQNwxPDDkWXhW+gZswbaiie5fd/W2ygcto78XCSPfFWveUOSZ
-# 5SqK95tBO8aTHmEa4lpJVD7HrTEn9jb1EGvxOb1cnn0CMIIGGjCCBAKgAwIBAgIQ
-# Yh1tDFIBnjuQeRUgiSEcCjANBgkqhkiG9w0BAQwFADBWMQswCQYDVQQGEwJHQjEY
-# MBYGA1UEChMPU2VjdGlnbyBMaW1pdGVkMS0wKwYDVQQDEyRTZWN0aWdvIFB1Ymxp
-# YyBDb2RlIFNpZ25pbmcgUm9vdCBSNDYwHhcNMjEwMzIyMDAwMDAwWhcNMzYwMzIx
-# MjM1OTU5WjBUMQswCQYDVQQGEwJHQjEYMBYGA1UEChMPU2VjdGlnbyBMaW1pdGVk
-# MSswKQYDVQQDEyJTZWN0aWdvIFB1YmxpYyBDb2RlIFNpZ25pbmcgQ0EgUjM2MIIB
-# ojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAmyudU/o1P45gBkNqwM/1f/bI
-# U1MYyM7TbH78WAeVF3llMwsRHgBGRmxDeEDIArCS2VCoVk4Y/8j6stIkmYV5Gej4
-# NgNjVQ4BYoDjGMwdjioXan1hlaGFt4Wk9vT0k2oWJMJjL9G//N523hAm4jF4UjrW
-# 2pvv9+hdPX8tbbAfI3v0VdJiJPFy/7XwiunD7mBxNtecM6ytIdUlh08T2z7mJEXZ
-# D9OWcJkZk5wDuf2q52PN43jc4T9OkoXZ0arWZVeffvMr/iiIROSCzKoDmWABDRzV
-# /UiQ5vqsaeFaqQdzFf4ed8peNWh1OaZXnYvZQgWx/SXiJDRSAolRzZEZquE6cbcH
-# 747FHncs/Kzcn0Ccv2jrOW+LPmnOyB+tAfiWu01TPhCr9VrkxsHC5qFNxaThTG5j
-# 4/Kc+ODD2dX/fmBECELcvzUHf9shoFvrn35XGf2RPaNTO2uSZ6n9otv7jElspkfK
-# 9qEATHZcodp+R4q2OIypxR//YEb3fkDn3UayWW9bAgMBAAGjggFkMIIBYDAfBgNV
-# HSMEGDAWgBQy65Ka/zWWSC8oQEJwIDaRXBeF5jAdBgNVHQ4EFgQUDyrLIIcouOxv
-# SK4rVKYpqhekzQwwDgYDVR0PAQH/BAQDAgGGMBIGA1UdEwEB/wQIMAYBAf8CAQAw
-# EwYDVR0lBAwwCgYIKwYBBQUHAwMwGwYDVR0gBBQwEjAGBgRVHSAAMAgGBmeBDAEE
-# ATBLBgNVHR8ERDBCMECgPqA8hjpodHRwOi8vY3JsLnNlY3RpZ28uY29tL1NlY3Rp
-# Z29QdWJsaWNDb2RlU2lnbmluZ1Jvb3RSNDYuY3JsMHsGCCsGAQUFBwEBBG8wbTBG
-# BggrBgEFBQcwAoY6aHR0cDovL2NydC5zZWN0aWdvLmNvbS9TZWN0aWdvUHVibGlj
-# Q29kZVNpZ25pbmdSb290UjQ2LnA3YzAjBggrBgEFBQcwAYYXaHR0cDovL29jc3Au
-# c2VjdGlnby5jb20wDQYJKoZIhvcNAQEMBQADggIBAAb/guF3YzZue6EVIJsT/wT+
-# mHVEYcNWlXHRkT+FoetAQLHI1uBy/YXKZDk8+Y1LoNqHrp22AKMGxQtgCivnDHFy
-# AQ9GXTmlk7MjcgQbDCx6mn7yIawsppWkvfPkKaAQsiqaT9DnMWBHVNIabGqgQSGT
-# rQWo43MOfsPynhbz2Hyxf5XWKZpRvr3dMapandPfYgoZ8iDL2OR3sYztgJrbG6VZ
-# 9DoTXFm1g0Rf97Aaen1l4c+w3DC+IkwFkvjFV3jS49ZSc4lShKK6BrPTJYs4NG1D
-# GzmpToTnwoqZ8fAmi2XlZnuchC4NPSZaPATHvNIzt+z1PHo35D/f7j2pO1S8BCys
-# QDHCbM5Mnomnq5aYcKCsdbh0czchOm8bkinLrYrKpii+Tk7pwL7TjRKLXkomm5D1
-# Umds++pip8wH2cQpf93at3VDcOK4N7EwoIJB0kak6pSzEu4I64U6gZs7tS/dGNSl
-# jf2OSSnRr7KWzq03zl8l75jy+hOds9TWSenLbjBQUGR96cFr6lEUfAIEHVC1L68Y
-# 1GGxx4/eRI82ut83axHMViw1+sVpbPxg51Tbnio1lB93079WPFnYaOvfGAA0e0zc
-# fF/M9gXr+korwQTh2Prqooq2bYNMvUoUKD85gnJ+t0smrWrb8dee2CvYZXD5laGt
-# aAxOfy/VKNmwuWuAh9kcMIIGYjCCBMqgAwIBAgIRAKQpO24e3denNAiHrXpOtyQw
-# DQYJKoZIhvcNAQEMBQAwVTELMAkGA1UEBhMCR0IxGDAWBgNVBAoTD1NlY3RpZ28g
-# TGltaXRlZDEsMCoGA1UEAxMjU2VjdGlnbyBQdWJsaWMgVGltZSBTdGFtcGluZyBD
-# QSBSMzYwHhcNMjUwMzI3MDAwMDAwWhcNMzYwMzIxMjM1OTU5WjByMQswCQYDVQQG
-# EwJHQjEXMBUGA1UECBMOV2VzdCBZb3Jrc2hpcmUxGDAWBgNVBAoTD1NlY3RpZ28g
-# TGltaXRlZDEwMC4GA1UEAxMnU2VjdGlnbyBQdWJsaWMgVGltZSBTdGFtcGluZyBT
-# aWduZXIgUjM2MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA04SV9G6k
-# U3jyPRBLeBIHPNyUgVNnYayfsGOyYEXrn3+SkDYTLs1crcw/ol2swE1TzB2aR/5J
-# IjKNf75QBha2Ddj+4NEPKDxHEd4dEn7RTWMcTIfm492TW22I8LfH+A7Ehz0/safc
-# 6BbsNBzjHTt7FngNfhfJoYOrkugSaT8F0IzUh6VUwoHdYDpiln9dh0n0m545d5A5
-# tJD92iFAIbKHQWGbCQNYplqpAFasHBn77OqW37P9BhOASdmjp3IijYiFdcA0WQIe
-# 60vzvrk0HG+iVcwVZjz+t5OcXGTcxqOAzk1frDNZ1aw8nFhGEvG0ktJQknnJZE3D
-# 40GofV7O8WzgaAnZmoUn4PCpvH36vD4XaAF2CjiPsJWiY/j2xLsJuqx3JtuI4akH
-# 0MmGzlBUylhXvdNVXcjAuIEcEQKtOBR9lU4wXQpISrbOT8ux+96GzBq8TdbhoFcm
-# YaOBZKlwPP7pOp5Mzx/UMhyBA93PQhiCdPfIVOCINsUY4U23p4KJ3F1HqP3H6Slw
-# 3lHACnLilGETXRg5X/Fp8G8qlG5Y+M49ZEGUp2bneRLZoyHTyynHvFISpefhBCV0
-# KdRZHPcuSL5OAGWnBjAlRtHvsMBrI3AAA0Tu1oGvPa/4yeeiAyu+9y3SLC98gDVb
-# ySnXnkujjhIh+oaatsk/oyf5R2vcxHahajMCAwEAAaOCAY4wggGKMB8GA1UdIwQY
-# MBaAFF9Y7UwxeqJhQo1SgLqzYZcZojKbMB0GA1UdDgQWBBSIYYyhKjdkgShgoZsx
-# 0Iz9LALOTzAOBgNVHQ8BAf8EBAMCBsAwDAYDVR0TAQH/BAIwADAWBgNVHSUBAf8E
-# DDAKBggrBgEFBQcDCDBKBgNVHSAEQzBBMDUGDCsGAQQBsjEBAgEDCDAlMCMGCCsG
-# AQUFBwIBFhdodHRwczovL3NlY3RpZ28uY29tL0NQUzAIBgZngQwBBAIwSgYDVR0f
-# BEMwQTA/oD2gO4Y5aHR0cDovL2NybC5zZWN0aWdvLmNvbS9TZWN0aWdvUHVibGlj
-# VGltZVN0YW1waW5nQ0FSMzYuY3JsMHoGCCsGAQUFBwEBBG4wbDBFBggrBgEFBQcw
-# AoY5aHR0cDovL2NydC5zZWN0aWdvLmNvbS9TZWN0aWdvUHVibGljVGltZVN0YW1w
-# aW5nQ0FSMzYuY3J0MCMGCCsGAQUFBzABhhdodHRwOi8vb2NzcC5zZWN0aWdvLmNv
-# bTANBgkqhkiG9w0BAQwFAAOCAYEAAoE+pIZyUSH5ZakuPVKK4eWbzEsTRJOEjbIu
-# 6r7vmzXXLpJx4FyGmcqnFZoa1dzx3JrUCrdG5b//LfAxOGy9Ph9JtrYChJaVHrus
-# Dh9NgYwiGDOhyyJ2zRy3+kdqhwtUlLCdNjFjakTSE+hkC9F5ty1uxOoQ2ZkfI5WM
-# 4WXA3ZHcNHB4V42zi7Jk3ktEnkSdViVxM6rduXW0jmmiu71ZpBFZDh7Kdens+PQX
-# PgMqvzodgQJEkxaION5XRCoBxAwWwiMm2thPDuZTzWp/gUFzi7izCmEt4pE3Kf0M
-# Ot3ccgwn4Kl2FIcQaV55nkjv1gODcHcD9+ZVjYZoyKTVWb4VqMQy/j8Q3aaYd/jO
-# Q66Fhk3NWbg2tYl5jhQCuIsE55Vg4N0DUbEWvXJxtxQQaVR5xzhEI+BjJKzh3TQ0
-# 26JxHhr2fuJ0mV68AluFr9qshgwS5SpN5FFtaSEnAwqZv3IS+mlG50rK7W3qXbWw
-# i4hmpylUfygtYLEdLQukNEX1jiOKMIIGazCCBNOgAwIBAgIRAIxBnpO/K86siAYo
-# O3YZvTwwDQYJKoZIhvcNAQEMBQAwVDELMAkGA1UEBhMCR0IxGDAWBgNVBAoTD1Nl
-# Y3RpZ28gTGltaXRlZDErMCkGA1UEAxMiU2VjdGlnbyBQdWJsaWMgQ29kZSBTaWdu
-# aW5nIENBIFIzNjAeFw0yNDExMTQwMDAwMDBaFw0yNzExMTQyMzU5NTlaMFcxCzAJ
-# BgNVBAYTAkRFMRYwFAYDVQQIDA1OaWVkZXJzYWNoc2VuMRcwFQYDVQQKDA5NYXJ0
-# aW4gV2lsbGluZzEXMBUGA1UEAwwOTWFydGluIFdpbGxpbmcwggIiMA0GCSqGSIb3
-# DQEBAQUAA4ICDwAwggIKAoICAQDRn27mnIzB6dsJFLMexQQNRd8aMv73DTla68G6
-# Q8u+V2TY1JQ/Z4j2oCI9ATW3K3P7NAPdlE0QmtdjC0F/74jsfil/i8LwxuyT034w
-# abViZKUcodmKsEFhM9am8W5kUgLuC5FIK4wNOq5TfzYdHTyJu1eR2XuSDoMp0wg4
-# 5mOuFNBbYB8DVBtHxobvWq4eCs3lUxX07wR3Qr2Utb92w8eU2vKr2Ss9xIh/YvM4
-# UxgBpO1I6O+W2tAB5mmynIgoCfX7mu6iD3A+AhpQ9Gv209G83y8FPrFJIWU77TTe
-# hErbPjZ074xXwrlEkhnGUCk1w+KiNtZHaSn0X+vnhqJ7otBxQZQAESlhWXpDKCun
-# nnVnVgwvVWtccAhxZO95eif6Vss/UhCaBZ26szlneGtFeTClI4+k3mqfWuodtXjH
-# c8ohAclWp7XVywliwhCFEsAcFkpkCyivey0sqEfrwiMnRy1elH1S37XcQaav5+bt
-# 4KxtIXuOVEx3vM9MHdlraW0y1on5E8i4tagdI45TH0LU080ubc2MKqq6ZXtplTu1
-# wdF2Cgy3hfSSLkJscRWApvpvOO6Vtc4jTG/AO6iqN5M6Swd+g40XtsxBD/gSk9kM
-# qkgJ1pD1Gp5gkHnP1veut+YgJ9xWcRDJI7vcis9qsXwtVybeOCh56rTQvC/Tf6BJ
-# tiieEQIDAQABo4IBszCCAa8wHwYDVR0jBBgwFoAUDyrLIIcouOxvSK4rVKYpqhek
-# zQwwHQYDVR0OBBYEFIxyZAmEHl7uAfEwbB4nzI8MCCLbMA4GA1UdDwEB/wQEAwIH
-# gDAMBgNVHRMBAf8EAjAAMBMGA1UdJQQMMAoGCCsGAQUFBwMDMEoGA1UdIARDMEEw
-# NQYMKwYBBAGyMQECAQMCMCUwIwYIKwYBBQUHAgEWF2h0dHBzOi8vc2VjdGlnby5j
-# b20vQ1BTMAgGBmeBDAEEATBJBgNVHR8EQjBAMD6gPKA6hjhodHRwOi8vY3JsLnNl
-# Y3RpZ28uY29tL1NlY3RpZ29QdWJsaWNDb2RlU2lnbmluZ0NBUjM2LmNybDB5Bggr
-# BgEFBQcBAQRtMGswRAYIKwYBBQUHMAKGOGh0dHA6Ly9jcnQuc2VjdGlnby5jb20v
-# U2VjdGlnb1B1YmxpY0NvZGVTaWduaW5nQ0FSMzYuY3J0MCMGCCsGAQUFBzABhhdo
-# dHRwOi8vb2NzcC5zZWN0aWdvLmNvbTAoBgNVHREEITAfgR1td2lsbGluZ0BsZXRo
-# YWwtZm9yZW5zaWNzLmNvbTANBgkqhkiG9w0BAQwFAAOCAYEAZ0dBMMwluWGb+MD1
-# rGWaPtaXrNZnlZqOZxgbdrMLBKAQr0QGcILCVIZ4SZYaevT5yMR6jFGSAjgaFtnk
-# 8ZpbtGwig/ed/C/D1Ne8SZyffdtALns/5CHxMnU8ks7ut7dsR6zFD4/bmljuoUoi
-# 55W6/XU/1pr+tqRaZGJvjSKJQCN9MhFAvXSpPPqRsj27ze1+KYIBF1/L0BW0HS0d
-# 9ZhGSUoEwqMDLpQf2eqJFyyyzWt21VVhLF6mgZ1dE5tCLZY7ERzx6/h5N7F0w361
-# oigizMbCMdST29XOc5mB8q6Cye7OmEfM2jByRWa+cd4RycsN2p2wHRukpq48iX+t
-# PVKmHwNKf+upuKPDQAeV4J7gUCtevIsOtoyiC2+amimu81o424Dl+NsAyCLz0SXv
-# NAhVvtU73H61gtoPa/SWouem2S+bzp7oGvGPop/9mh4CXki6LVeDH3hDM8hZsJg/
-# EToIWiDozTc2yWqwV4Ozyd4x5Ix8lckXMgWuyWcxmLK1RmKpMIIGgjCCBGqgAwIB
-# AgIQNsKwvXwbOuejs902y8l1aDANBgkqhkiG9w0BAQwFADCBiDELMAkGA1UEBhMC
-# VVMxEzARBgNVBAgTCk5ldyBKZXJzZXkxFDASBgNVBAcTC0plcnNleSBDaXR5MR4w
-# HAYDVQQKExVUaGUgVVNFUlRSVVNUIE5ldHdvcmsxLjAsBgNVBAMTJVVTRVJUcnVz
-# dCBSU0EgQ2VydGlmaWNhdGlvbiBBdXRob3JpdHkwHhcNMjEwMzIyMDAwMDAwWhcN
-# MzgwMTE4MjM1OTU5WjBXMQswCQYDVQQGEwJHQjEYMBYGA1UEChMPU2VjdGlnbyBM
-# aW1pdGVkMS4wLAYDVQQDEyVTZWN0aWdvIFB1YmxpYyBUaW1lIFN0YW1waW5nIFJv
-# b3QgUjQ2MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAiJ3YuUVnnR3d
-# 6LkmgZpUVMB8SQWbzFoVD9mUEES0QUCBdxSZqdTkdizICFNeINCSJS+lV1ipnW5i
-# hkQyC0cRLWXUJzodqpnMRs46npiJPHrfLBOifjfhpdXJ2aHHsPHggGsCi7uE0awq
-# KggE/LkYw3sqaBia67h/3awoqNvGqiFRJ+OTWYmUCO2GAXsePHi+/JUNAax3kpqs
-# tbl3vcTdOGhtKShvZIvjwulRH87rbukNyHGWX5tNK/WABKf+Gnoi4cmisS7oSimg
-# HUI0Wn/4elNd40BFdSZ1EwpuddZ+Wr7+Dfo0lcHflm/FDDrOJ3rWqauUP8hsokDo
-# I7D/yUVI9DAE/WK3Jl3C4LKwIpn1mNzMyptRwsXKrop06m7NUNHdlTDEMovXAIDG
-# AvYynPt5lutv8lZeI5w3MOlCybAZDpK3Dy1MKo+6aEtE9vtiTMzz/o2dYfdP0KWZ
-# wZIXbYsTIlg1YIetCpi5s14qiXOpRsKqFKqav9R1R5vj3NgevsAsvxsAnI8Oa5s2
-# oy25qhsoBIGo/zi6GpxFj+mOdh35Xn91y72J4RGOJEoqzEIbW3q0b2iPuWLA911c
-# RxgY5SJYubvjay3nSMbBPPFsyl6mY4/WYucmyS9lo3l7jk27MAe145GWxK4O3m3g
-# EFEIkv7kRmefDR7Oe2T1HxAnICQvr9sCAwEAAaOCARYwggESMB8GA1UdIwQYMBaA
-# FFN5v1qqK0rPVIDh2JvAnfKyA2bLMB0GA1UdDgQWBBT2d2rdP/0BE/8WoWyCAi/Q
-# Cj0UJTAOBgNVHQ8BAf8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB/zATBgNVHSUEDDAK
-# BggrBgEFBQcDCDARBgNVHSAECjAIMAYGBFUdIAAwUAYDVR0fBEkwRzBFoEOgQYY/
-# aHR0cDovL2NybC51c2VydHJ1c3QuY29tL1VTRVJUcnVzdFJTQUNlcnRpZmljYXRp
-# b25BdXRob3JpdHkuY3JsMDUGCCsGAQUFBwEBBCkwJzAlBggrBgEFBQcwAYYZaHR0
-# cDovL29jc3AudXNlcnRydXN0LmNvbTANBgkqhkiG9w0BAQwFAAOCAgEADr5lQe1o
-# RLjlocXUEYfktzsljOt+2sgXke3Y8UPEooU5y39rAARaAdAxUeiX1ktLJ3+lgxto
-# LQhn5cFb3GF2SSZRX8ptQ6IvuD3wz/LNHKpQ5nX8hjsDLRhsyeIiJsms9yAWnvdY
-# OdEMq1W61KE9JlBkB20XBee6JaXx4UBErc+YuoSb1SxVf7nkNtUjPfcxuFtrQdRM
-# Ri/fInV/AobE8Gw/8yBMQKKaHt5eia8ybT8Y/Ffa6HAJyz9gvEOcF1VWXG8OMeM7
-# Vy7Bs6mSIkYeYtddU1ux1dQLbEGur18ut97wgGwDiGinCwKPyFO7ApcmVJOtlw9F
-# VJxw/mL1TbyBns4zOgkaXFnnfzg4qbSvnrwyj1NiurMp4pmAWjR+Pb/SIduPnmFz
-# bSN/G8reZCL4fvGlvPFk4Uab/JVCSmj59+/mB2Gn6G/UYOy8k60mKcmaAZsEVkhO
-# Fuoj4we8CYyaR9vd9PGZKSinaZIkvVjbH/3nlLb0a7SBIkiRzfPfS9T+JesylbHa
-# 1LtRV9U/7m0q7Ma2CQ/t392ioOssXW7oKLdOmMBl14suVFBmbzrt5V5cQPnwtd3U
-# OTpS9oCG+ZZheiIvPgkDmA8FzPsnfXW5qHELB43ET7HHFHeRPRYrMBKjkb8/IN7P
-# o0d0hQoF4TeMM+zYAJzoKQnVKOLg8pZVPT8xggYxMIIGLQIBATBpMFQxCzAJBgNV
-# BAYTAkdCMRgwFgYDVQQKEw9TZWN0aWdvIExpbWl0ZWQxKzApBgNVBAMTIlNlY3Rp
-# Z28gUHVibGljIENvZGUgU2lnbmluZyBDQSBSMzYCEQCMQZ6TvyvOrIgGKDt2Gb08
-# MAkGBSsOAwIaBQCgeDAYBgorBgEEAYI3AgEMMQowCKACgAChAoAAMBkGCSqGSIb3
-# DQEJAzEMBgorBgEEAYI3AgEEMBwGCisGAQQBgjcCAQsxDjAMBgorBgEEAYI3AgEV
-# MCMGCSqGSIb3DQEJBDEWBBSy1OqgZRIUUNuA4v772awAsz1gLTANBgkqhkiG9w0B
-# AQEFAASCAgCFJ/FR7K4u7HL2p0UxEWfu8j1QxW3epwgatNbfXBbIfGhw1Uo7/jul
-# EDYEbwghYf3VIZvTGJWIf8KFkxXuTZZhFGFGWUC9IZq/grH1W3acuSxHcJoy8gNN
-# /FSBuZj4Jg0fgUIF0pHlOjYQpM1mXr5Ea6rkG5PIJTUZUS1ockJB2djwbWhFusah
-# GTjtXYG5Lp9ZH53N7XFBxUr+FoaZ6PSWHvp3btMUoLsRC3m1rGzLs4qps7Lrz6Cf
-# B8AiSS9DpGunpUH8kFaK4PD0FzflkTK7rhvfb9qb+A8gr/Oylzhpjkefs6ZRjQJ8
-# x02y6MtXKOv4s3/IWrrpOvie1I4ujI1aP8sxhUvsGdlIdD44oI5W4KbtNmtrbHeO
-# +vKFWjDOqm/Mfl7cDBYbQWCRT7gplDAqs9EJp7Lp1FUcAgDT5/6s9Z/a/Q75uNmG
-# AKvrEQNd+vpne2iUHV04p2eaMAzWwC2BL/3gWS7LHMxQaBO4lChH6AOnQBYviHPE
-# SeKT8GQcLUNlN1lvssP+YjtWsWdLi06/ezlDQmiUwX7PLtl9Ehia4+sc3HGWe2gO
-# O1V1SSlnN2EbYEw45rDwfK3q0pZKQAYj3tPLt/n5s2YBub6Jq5sJLovhTAbDR58M
-# /J73fcvcDDF8P6Cu/4fAY6+qyS2X2GiYcu+dCfO1oYTIteCdetid+6GCAyMwggMf
-# BgkqhkiG9w0BCQYxggMQMIIDDAIBATBqMFUxCzAJBgNVBAYTAkdCMRgwFgYDVQQK
-# Ew9TZWN0aWdvIExpbWl0ZWQxLDAqBgNVBAMTI1NlY3RpZ28gUHVibGljIFRpbWUg
-# U3RhbXBpbmcgQ0EgUjM2AhEApCk7bh7d16c0CIetek63JDANBglghkgBZQMEAgIF
-# AKB5MBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkFMQ8XDTI1
-# MTEyMDA2MTc0M1owPwYJKoZIhvcNAQkEMTIEMJyt/N5typjjObqt6uynO/NRyTWm
-# R/bLyTm3iDM72cLlkmY3g0ctwdeHddNiRoICXTANBgkqhkiG9w0BAQEFAASCAgBN
-# NnSIoF/a/gjf/fztQQg9lWSG0ug+ML7WmGGDIC/YCsZwdmIx+zuo6BKgOhDIuduI
-# u72lk+gTL45o8/1o5rUxD09pueWp2iUq+Lhp77FaQ10AIt0T2wSA3iMHhTNC4DEC
-# 7XtWsZ/lPAZyafR3ilsv6JywQZgfeiFaZmXJJRLGq/asSLSab5ppUbbkRsPhQ+mu
-# c37WxTBbJTTWv95ItNaz6FlO50L+acQdtKdwsO61K53L84eQt9fFOTyDigvUiaa/
-# zm9NSqigFtVI/VDB6m/bDxUM4JvIOT4MPjBt6lmKA0OGBB/K2ERETCOsG6Pet/qA
-# kJ8ztCnzFBQSeDtJlefcHDDCIUu5i5BjiYMpSl4FxvSXsHch7yULXHZF5ulkxoYE
-# SmSW6hmGRsRrWqV8HTJbiGWfpMkFXuk5KQwSwCpd4H5H1fBPt3Hc/h2H00mqeN22
-# dCly2KZkDlGoA0RoXYfRMgy0AITzwK39fcVrpZTl7PmZd/vyywubBYansx5rQcFI
-# V7Xzgot4Go3/kAyIk78lJHJRBPkre0K5PWWZUVPrrK2QyXNcEKWXCZPCuyLP2mcZ
-# W6c9EM84GHa9QgEXQje9LqTeD+kzWaQ0UaweLfSTQ8wWrrLMueiG8uQjhz0qt+RU
-# wMLSYTQhn4YKFREfI1bQw6TM19Ze/hCKTWl60Q69fA==
-# SIG # End signature block
+# Main
+Header
+TCC
+Get-AppInfo
+Get-Stats
+Footer
+
+#############################################################################################################################################################################################
+#############################################################################################################################################################################################

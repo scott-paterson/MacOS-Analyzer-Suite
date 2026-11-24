@@ -1,4 +1,4 @@
-﻿# DSStore-Analyzer v0.1
+# DSStore-Analyzer v0.1
 #
 # @author:    Martin Willing
 # @copyright: Copyright (c) 2025 Martin Willing. All rights reserved. Licensed under the MIT license.
@@ -82,7 +82,8 @@
 [CmdletBinding()]
 Param(
     [String]$InputDir,
-    [String]$OutputDir
+    [String]$OutputDir,
+    [switch]$NoExcel = $true
 )
 
 #endregion CmdletBinding
@@ -117,49 +118,119 @@ else
     $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Definition
 }
 
-# Colors
-Add-Type -AssemblyName System.Drawing
-$script:Green  = [System.Drawing.Color]::FromArgb(0,176,80) # Green
-$script:Orange = [System.Drawing.Color]::FromArgb(255,192,0) # Orange
+# Detect Operating System
+# NOTE: Do NOT use names like IsWindows/IsMacOS/IsLinux here because PowerShell defines read-only automatic variables with those names.
+$script:OnWindows = $false
+$script:OnMacOS   = $false
+$script:OnLinux   = $false
+
+if ($PSVersionTable.PSVersion.Major -ge 6)
+{
+    $script:OnWindows = $IsWindows
+    $script:OnMacOS   = $IsMacOS
+    $script:OnLinux   = $IsLinux
+}
+else
+{
+    # Windows PowerShell 5.1
+    $script:OnWindows = $true
+}
+
+# Excel export toggle (optional)
+$script:EnableExcel = $false
+if (-not $NoExcel -and (Get-Module -ListAvailable -Name ImportExcel))
+{
+    $script:EnableExcel = $true
+}
+
+# Colors / Styling (only supported on Windows)
+$script:UseExcelStyling = $false
+if ($script:OnWindows)
+{
+    Add-Type -AssemblyName System.Drawing
+    $script:Green  = [System.Drawing.Color]::FromArgb(0,176,80) # Green
+    $script:Orange = [System.Drawing.Color]::FromArgb(255,192,0) # Orange
+
+    if ($script:EnableExcel)
+    {
+        $script:UseExcelStyling = $true
+    }
+}
 
 # Output Directory
 if (!($OutputDir))
 {
-    $script:OUTPUT_FOLDER = "$env:USERPROFILE\Desktop\DSStore-Analyzer" # Default
+    if ($script:OnMacOS -or $script:OnLinux)
+    {
+        $script:OUTPUT_FOLDER = Join-Path (Join-Path $HOME "Desktop") "DSStore-Analyzer"
+    }
+    else
+    {
+        $script:OUTPUT_FOLDER = Join-Path (Join-Path $env:USERPROFILE "Desktop") "DSStore-Analyzer"
+    }
 }
 else
 {
-    if ($OutputDir -cnotmatch '.+(?=\\)') 
+    # Validate path - accept both Windows and Unix paths
+    if ($OutputDir -cnotmatch '.+(?=[/\\])' -and $OutputDir -notmatch '^[/~]')
     {
         Write-Host "[Error] You must provide a valid directory path." -ForegroundColor Red
         Exit
     }
     else
     {
-        $script:OUTPUT_FOLDER = "$OutputDir\DSStore-Analyzer" # Custom
+        $script:OUTPUT_FOLDER = Join-Path $OutputDir "DSStore-Analyzer"
     }
 }
 
 # Tools
 
 # DSStoreParser by Nicole Ibrahim
-$script:DSStoreParser = "$SCRIPT_DIR\Tools\DSStoreParser\DSStoreParser.exe"
+$script:DSStoreParser = Join-Path $SCRIPT_DIR "Tools/DSStoreParser/DSStoreParser.exe"
 
 # SQLite3
-$script:SQLite3 = "$SCRIPT_DIR\Tools\SQLite\sqlite3.exe"
+if ($script:OnMacOS -or $script:OnLinux)
+{
+    # Use system sqlite3
+    $script:SQLite3 = (Get-Command sqlite3 -ErrorAction SilentlyContinue).Source
+    if (-not $script:SQLite3)
+    {
+        $script:SQLite3 = "/usr/bin/sqlite3"
+    }
+}
+else
+{
+    $script:SQLite3 = Join-Path $SCRIPT_DIR "Tools/SQLite/sqlite3.exe"
+}
 
 # xsv
-$script:xsv = "$SCRIPT_DIR\Tools\xsv\xsv.exe"
+if ($script:OnMacOS -or $script:OnLinux)
+{
+    $script:xsv = (Get-Command xsv -ErrorAction SilentlyContinue).Source
+    if (-not $script:xsv)
+    {
+        $script:xsv = "/opt/homebrew/bin/xsv"
+        if (-not (Test-Path $script:xsv))
+        {
+            $script:xsv = "/usr/local/bin/xsv"
+        }
+    }
+}
+else
+{
+    $script:xsv = Join-Path $SCRIPT_DIR "Tools/xsv/xsv.exe"
+}
 
 # Configuration File (JSON)
-if(!(Test-Path "$PSScriptRoot\Config.json"))
+$ConfigPath = Join-Path $PSScriptRoot "Config.json"
+if(!(Test-Path $ConfigPath))
 {
     Write-Host "[Error] Config.json NOT found." -ForegroundColor Red
     Exit
 }
 else
 {
-    $Config = Get-Content "$PSScriptRoot\Config.json" | ConvertFrom-Json
+    $Config = Get-Content $ConfigPath | ConvertFrom-Json
 
     # BackgroundColor
     if ($Config.ImportExcel.BackgroundColor)
@@ -171,9 +242,13 @@ else
         }
     }
 
-    # Excel - Color Scheme
-    $script:BackgroundColor = [System.Drawing.Color]$Config.ImportExcel.BackgroundColor
-    $script:FontColor       = $Config.ImportExcel.FontColor
+    # Excel - Color Scheme (only used for styling on Windows)
+    if ($script:UseExcelStyling)
+    {
+        $rgbValues = $Config.ImportExcel.BackgroundColor -split ','
+        $script:BackgroundColor = [System.Drawing.Color]::FromArgb([int]$rgbValues[0], [int]$rgbValues[1], [int]$rgbValues[2])
+        $script:FontColor = $Config.ImportExcel.FontColor
+    }
 }
 
 #endregion Declarations
@@ -187,39 +262,67 @@ Function Header {
 
 # Windows Title
 $DefaultWindowsTitle = $Host.UI.RawUI.WindowTitle
-$Host.UI.RawUI.WindowTitle = "FSEvents-Analyzer v0.1 - Automated Forensic Analysis of DS_Store Files for DFIR"
+$Host.UI.RawUI.WindowTitle = "DSStore-Analyzer v0.1 - Automated Forensic Analysis of DS_Store Files for DFIR"
 
-# Check if the PowerShell script is being run with admin rights
-if (!([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))
+# Check if the PowerShell script is being run with elevated privileges
+if ($script:OnMacOS -or $script:OnLinux)
 {
-    Write-Host "[Error] This PowerShell script must be run with admin rights." -ForegroundColor Red
-    Exit
+    $currentUser = & id -u
+    if ($currentUser -ne "0")
+    {
+        Write-Host "[Warning] This script may require elevated privileges (sudo) for some operations." -ForegroundColor Yellow
+        # Don't exit - allow the script to continue and fail gracefully if needed
+    }
+}
+else
+{
+    # Windows admin check
+    if (!([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))
+    {
+        Write-Host "[Error] This PowerShell script must be run with admin rights." -ForegroundColor Red
+        Exit
+    }
 }
 
-# Check if PowerShell module 'ImportExcel' is installed
-if (!(Get-Module -ListAvailable -Name ImportExcel))
+# ImportExcel is optional
+if (-not $script:EnableExcel)
 {
-    Write-Host "[Error] Please install 'ImportExcel' PowerShell module." -ForegroundColor Red
-    Write-Host "[Info]  Check out: https://github.com/dfinke/ImportExcel"
-    Exit
+    if ($NoExcel)
+    {
+        if ($PSBoundParameters.ContainsKey('NoExcel'))
+        {
+            Write-Host "[Info]  -NoExcel specified. XLSX output will be skipped." -ForegroundColor Yellow
+        }
+        else
+        {
+            Write-Host "[Info]  XLSX output is disabled by default. CSV output will be created." -ForegroundColor Yellow
+            Write-Host "[Info]  To enable XLSX (optional): install ImportExcel and run with -NoExcel:`$false" -ForegroundColor Yellow
+        }
+    }
+    else
+    {
+        Write-Host "[Info]  ImportExcel not installed. XLSX output will be skipped." -ForegroundColor Yellow
+        Write-Host "[Info]  Install (optional): Install-Module -Name ImportExcel -Scope CurrentUser" -ForegroundColor Yellow
+    }
 }
 
-# Check if sqlite3.exe exists
-if (!(Test-Path "$($SQLite3)"))
+# DSStoreParser + helper tools are Windows-only in this repo
+if ($script:OnWindows -and (Test-Path $script:DSStoreParser))
 {
-    Write-Host "[Error] sqlite3.exe NOT found." -ForegroundColor Red
-    Stop-Transcript
-    $Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
-    Exit
-}
+    # Check if sqlite3 exists
+    if (!(Test-Path "$($SQLite3)"))
+    {
+        Write-Host "[Error] sqlite3 NOT found." -ForegroundColor Red
+        Exit
+    }
 
-# Check if xsv.exe exists
-if (!(Test-Path "$($xsv)"))
-{
-    Write-Host "[Error] xsv.exe NOT found." -ForegroundColor Red
-    Stop-Transcript
-    $Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
-    Exit
+    # Check if xsv exists
+    if (!(Test-Path "$($xsv)"))
+    {
+        Write-Host "[Error] xsv NOT found." -ForegroundColor Red
+        Write-Host "[Info]  Install (optional): brew install xsv" -ForegroundColor Yellow
+        Exit
+    }
 }
 
 # Flush Output Directory
@@ -245,44 +348,98 @@ Function script:Get-FileSize
     Else {""}
 }
 
-# Add the required MessageBox class (Windows PowerShell)
-Add-Type -AssemblyName System.Windows.Forms
+# macOS folder picker (Explorer-like) via osascript
+Function script:Select-FolderMacOS {
+    param(
+        [string]$Prompt = "Choose a folder"
+    )
+    try
+    {
+        $escapedPrompt = $Prompt.Replace('"','\"')
+        $result = & osascript -e "POSIX path of (choose folder with prompt `"$escapedPrompt`")" 2>$null
+        if ([string]::IsNullOrWhiteSpace($result)) { return $null }
+        return ($result.Trim())
+    }
+    catch
+    {
+        return $null
+    }
+}
 
 # Select folder containing .DS_Store Files
 if(!($InputDir))
 {
-    Function Get-FolderPath($InitialDirectory)
+    if ($script:OnWindows)
     {
-        [System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms") | Out-Null
-        $script:OpenFolderDialog = New-Object System.Windows.Forms.FolderBrowserDialog
-        $OpenFolderDialog.Description = 'Select a folder containing DS_Store File(s)'
-        $OpenFolderDialog.ShowNewFolderButton = $false
-        $OpenFolderDialog.RootFolder = "MyComputer"
-        $Topmost = New-Object System.Windows.Forms.Form
-        $Topmost.TopMost = $True
-        $Topmost.MinimizeBox = $True
-        $OpenFolderDialog.ShowDialog($Topmost)
-    }
+        # Windows - Use FolderBrowserDialog
+        Add-Type -AssemblyName System.Windows.Forms
+        Function Get-FolderPath($InitialDirectory)
+        {
+            [System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms") | Out-Null
+            $script:OpenFolderDialog = New-Object System.Windows.Forms.FolderBrowserDialog
+            $OpenFolderDialog.Description = 'Select a folder containing DS_Store File(s)'
+            $OpenFolderDialog.ShowNewFolderButton = $false
+            $OpenFolderDialog.RootFolder = "MyComputer"
+            $Topmost = New-Object System.Windows.Forms.Form
+            $Topmost.TopMost = $True
+            $Topmost.MinimizeBox = $True
+            $OpenFolderDialog.ShowDialog($Topmost)
+        }
 
-    $Result = Get-FolderPath
-
-    if($Result -eq "OK")
-    {
-        $script:FolderPath = $OpenFolderDialog.SelectedPath
+        $Result = Get-FolderPath
+        if($Result -eq "OK")
+        {
+            $script:FolderPath = $OpenFolderDialog.SelectedPath
+        }
+        else
+        {
+            $Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
+            Exit
+        }
     }
     else
     {
-        $Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
-        Exit
+        if ($script:OnMacOS)
+        {
+            $picked = Select-FolderMacOS -Prompt "Select a folder containing DS_Store file(s)"
+            if ($picked)
+            {
+                $script:FolderPath = $picked
+            }
+            else
+            {
+                Write-Host ""
+                $script:FolderPath = Read-Host "Enter folder path containing DS_Store files"
+            }
+        }
+        else
+        {
+            $script:FolderPath = Read-Host "Enter folder path containing DS_Store files"
+        }
+        if ([string]::IsNullOrWhiteSpace($script:FolderPath))
+        {
+            Write-Host "[Error] No folder path provided." -ForegroundColor Red
+            Exit
+        }
+        # Expand ~ to home directory
+        if ($script:FolderPath.StartsWith("~"))
+        {
+            $script:FolderPath = $script:FolderPath.Replace("~", $HOME)
+        }
     }
 }
 else
 {
     $script:FolderPath = $InputDir
+    # Expand ~ to home directory
+    if ($script:FolderPath.StartsWith("~"))
+    {
+        $script:FolderPath = $script:FolderPath.Replace("~", $HOME)
+    }
 }
 
 # Create a record of your PowerShell session to a text file
-Start-Transcript -Path "$OUTPUT_FOLDER\Transcript.txt"
+Start-Transcript -Path "$OUTPUT_FOLDER/Transcript.txt"
 
 # Get Start Time
 $script:startTime = (Get-Date)
@@ -393,12 +550,77 @@ Write-Output "[Info]  Total Input Size: $InputSize"
 #   - When a file is deleted/moved, its associated records are removed
 #   - When a file is renamed, its associated records are renamed
 
+Function Invoke-DSStoreInventory {
+
+    $StartTime_Inventory = (Get-Date)
+    Write-Output "[Info]  Creating .DS_Store inventory report (CSV) ..."
+
+    $csvDir = Join-Path $script:OUTPUT_FOLDER "CSV"
+    New-Item $csvDir -ItemType Directory -Force | Out-Null
+
+    if ($script:EnableExcel)
+    {
+        $xlsxDir = Join-Path $script:OUTPUT_FOLDER "XLSX"
+        New-Item $xlsxDir -ItemType Directory -Force | Out-Null
+    }
+
+    $files = Get-ChildItem -Path $script:FolderPath -Filter ".DS_Store" -Recurse -File -ErrorAction SilentlyContinue
+    if (-not $files -or $files.Count -eq 0)
+    {
+        Write-Output "[Info]  No .DS_Store files found."
+        return
+    }
+
+    $results = foreach ($f in $files)
+    {
+        $md5 = ""; $sha1 = ""; $sha256 = ""
+        try { $md5 = (Get-FileHash -LiteralPath $f.FullName -Algorithm MD5).Hash } catch {}
+        try { $sha1 = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA1).Hash } catch {}
+        try { $sha256 = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash } catch {}
+
+        [PSCustomObject]@{
+            "Path"        = $f.FullName
+            "SizeBytes"   = $f.Length
+            "CreatedUtc"  = $f.CreationTimeUtc.ToString("yyyy-MM-dd HH:mm:ss")
+            "ModifiedUtc" = $f.LastWriteTimeUtc.ToString("yyyy-MM-dd HH:mm:ss")
+            "AccessedUtc" = $f.LastAccessTimeUtc.ToString("yyyy-MM-dd HH:mm:ss")
+            "MD5"         = $md5
+            "SHA1"        = $sha1
+            "SHA256"      = $sha256
+        }
+    }
+
+    $inventoryCsv = Join-Path $csvDir "DSStoreFiles.csv"
+    $results | Export-Csv -Path $inventoryCsv -NoTypeInformation -Encoding UTF8
+    Write-Output "[Info]  Wrote: $inventoryCsv"
+
+    if ($script:EnableExcel -and (Test-Path $inventoryCsv))
+    {
+        $import = Import-Csv $inventoryCsv
+        $outXlsx = Join-Path (Join-Path $script:OUTPUT_FOLDER "XLSX") "DSStoreFiles.xlsx"
+
+        $import | Export-Excel -Path $outXlsx -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "DS_Store Files" -CellStyleSB {
+            param($WorkSheet)
+            if ($script:UseExcelStyling)
+            {
+                Set-Format -Address $WorkSheet.Cells["A1:H1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            }
+        }
+
+        Write-Output "[Info]  Wrote: $outXlsx"
+    }
+
+    $EndTime_Inventory = (Get-Date)
+    $Time_Inventory = ($EndTime_Inventory-$StartTime_Inventory)
+    ('DS_Store inventory duration: {0} h {1} min {2} sec' -f $Time_Inventory.Hours, $Time_Inventory.Minutes, $Time_Inventory.Seconds) >> "$script:OUTPUT_FOLDER/Stats.txt"
+}
+
 Function Invoke-DSStoreParser {
 
 $StartTime_DSStoreParser = (Get-Date)
 
 # DSStoreParser by Nicole Ibrahim
-if (Test-Path "$($DSStoreParser)")
+if ($script:OnWindows -and (Test-Path "$($DSStoreParser)"))
 {
     Write-Output "[Info]  Parsing Desktop Service Store File(s) w/ DSStoreParser ..."
     New-Item "$OUTPUT_FOLDER\DSStoreParser\Reports\TSV" -ItemType Directory -Force | Out-Null
@@ -407,7 +629,8 @@ if (Test-Path "$($DSStoreParser)")
 }
 else
 {
-    Write-Host "[Error] DSStoreParser.exe NOT found." -ForegroundColor Red
+    Write-Host "[Info]  DSStoreParser.exe is Windows-only. Skipping DSStoreParser-based parsing." -ForegroundColor Yellow
+    return
 }
 
 # Stats
@@ -434,7 +657,11 @@ if (Test-Path "$OUTPUT_FOLDER\DSStoreParser\DSStoreParser.txt")
 
 # Reports
 Write-Output "[Info]  Creating Reports ..."
-New-Item "$OUTPUT_FOLDER\DSStoreParser\Reports\XLSX" -ItemType Directory -Force | Out-Null
+New-Item "$OUTPUT_FOLDER\DSStoreParser\Reports\CSV" -ItemType Directory -Force | Out-Null
+if ($script:EnableExcel)
+{
+    New-Item "$OUTPUT_FOLDER\DSStoreParser\Reports\XLSX" -ItemType Directory -Force | Out-Null
+}
 
 # Report Columns
 # generated_path: The generated path using the location of the .DS_Store file and the record filename stored in the .DS_Store file.
@@ -458,23 +685,34 @@ if (Test-Path "$OUTPUT_FOLDER\DSStoreParser\Reports\TSV\$All_Parsed_Report.tsv")
     if([int](& $xsv count -d "`t" "$OUTPUT_FOLDER\DSStoreParser\Reports\TSV\$All_Parsed_Report.tsv") -gt 0)
     {
         $IMPORT = Import-Csv "$OUTPUT_FOLDER\DSStoreParser\Reports\TSV\$All_Parsed_Report.tsv" -Delimiter "`t" -Encoding UTF8
-        $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER\DSStoreParser\Reports\XLSX\All_Parsed_Report.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "All Parsed Report" -CellStyleSB {
-        param($WorkSheet)
-        # BackgroundColor and FontColor for specific cells of TopRow
-        Set-Format -Address $WorkSheet.Cells["A1:M1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-        # HorizontalAlignment "Left" of column A
-        $WorkSheet.Cells["E:E"].Style.HorizontalAlignment="Left"
-        # HorizontalAlignment "Center" of columns A-D and F-M
-        $WorkSheet.Cells["A:D"].Style.HorizontalAlignment="Center"
-        $WorkSheet.Cells["F:M"].Style.HorizontalAlignment="Center"
-        # ConditionalFormatting - record_filename
-        Add-ConditionalFormatting -Address $WorkSheet.Cells["B:B"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Drag into Terminal",$B1)))' -BackgroundColor Red # Drag-to-Terminal technique (to override Gatekeeper)
+
+        # CSV (always)
+        $IMPORT | Export-Csv -Path "$OUTPUT_FOLDER\DSStoreParser\Reports\CSV\All_Parsed_Report.csv" -NoTypeInformation -Encoding UTF8
+
+        # XLSX (optional)
+        if ($script:EnableExcel)
+        {
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER\DSStoreParser\Reports\XLSX\All_Parsed_Report.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "All Parsed Report" -CellStyleSB {
+            param($WorkSheet)
+            if ($script:UseExcelStyling)
+            {
+                # BackgroundColor and FontColor for specific cells of TopRow
+                Set-Format -Address $WorkSheet.Cells["A1:M1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+                # HorizontalAlignment "Left" of column A
+                $WorkSheet.Cells["E:E"].Style.HorizontalAlignment="Left"
+                # HorizontalAlignment "Center" of columns A-D and F-M
+                $WorkSheet.Cells["A:D"].Style.HorizontalAlignment="Center"
+                $WorkSheet.Cells["F:M"].Style.HorizontalAlignment="Center"
+                # ConditionalFormatting - record_filename
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["B:B"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Drag into Terminal",$B1)))' -BackgroundColor Red # Drag-to-Terminal technique (to override Gatekeeper)
+            }
+            }
         }
     }
 }
 
 # File Size (XLSX)
-if (Test-Path "$OUTPUT_FOLDER\DSStoreParser\Reports\XLSX\All_Parsed_Report.xlsx")
+if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER\DSStoreParser\Reports\XLSX\All_Parsed_Report.xlsx"))
 {
     $Size = Get-FileSize((Get-Item "$OUTPUT_FOLDER\DSStoreParser\Reports\XLSX\All_Parsed_Report.xlsx").Length)
     Write-Output "[Info]  File Size (XLSX): $Size"
@@ -487,15 +725,23 @@ if (Test-Path "$OUTPUT_FOLDER\DSStoreParser\Reports\TSV\$All_Parsed_Report.tsv")
     if([int](& $xsv count -d "`t" "$OUTPUT_FOLDER\DSStoreParser\Reports\TSV\$Access_Report.tsv") -gt 0)
     {
         $IMPORT = Import-Csv "$OUTPUT_FOLDER\DSStoreParser\Reports\TSV\$Access_Report.tsv" -Delimiter "`t" -Encoding UTF8
-        $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER\DSStoreParser\Reports\XLSX\Access_Report.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Access Report" -CellStyleSB {
-        param($WorkSheet)
-        # BackgroundColor and FontColor for specific cells of TopRow
-        Set-Format -Address $WorkSheet.Cells["A1:M1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-        # HorizontalAlignment "Left" of column A
-        $WorkSheet.Cells["E:E"].Style.HorizontalAlignment="Left"
-        # HorizontalAlignment "Center" of columns A-D and F-M
-        $WorkSheet.Cells["A:D"].Style.HorizontalAlignment="Center"
-        $WorkSheet.Cells["F:M"].Style.HorizontalAlignment="Center"
+        $IMPORT | Export-Csv -Path "$OUTPUT_FOLDER\DSStoreParser\Reports\CSV\Access_Report.csv" -NoTypeInformation -Encoding UTF8
+
+        if ($script:EnableExcel)
+        {
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER\DSStoreParser\Reports\XLSX\Access_Report.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Access Report" -CellStyleSB {
+            param($WorkSheet)
+            if ($script:UseExcelStyling)
+            {
+                # BackgroundColor and FontColor for specific cells of TopRow
+                Set-Format -Address $WorkSheet.Cells["A1:M1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+                # HorizontalAlignment "Left" of column A
+                $WorkSheet.Cells["E:E"].Style.HorizontalAlignment="Left"
+                # HorizontalAlignment "Center" of columns A-D and F-M
+                $WorkSheet.Cells["A:D"].Style.HorizontalAlignment="Center"
+                $WorkSheet.Cells["F:M"].Style.HorizontalAlignment="Center"
+            }
+            }
         }
     }
 }
@@ -507,15 +753,23 @@ if (Test-Path "$OUTPUT_FOLDER\DSStoreParser\Reports\TSV\$Miscellaneous_Info_Repo
     if([int](& $xsv count -d "`t" "$OUTPUT_FOLDER\DSStoreParser\Reports\TSV\$Miscellaneous_Info_Report.tsv") -gt 0)
     {
         $IMPORT = Import-Csv "$OUTPUT_FOLDER\DSStoreParser\Reports\TSV\$Miscellaneous_Info_Report.tsv" -Delimiter "`t" -Encoding UTF8
-        $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER\DSStoreParser\Reports\XLSX\Miscellaneous_Info_Report.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Miscellaneous Info Report" -CellStyleSB {
-        param($WorkSheet)
-        # BackgroundColor and FontColor for specific cells of TopRow
-        Set-Format -Address $WorkSheet.Cells["A1:M1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-        # HorizontalAlignment "Left" of column A
-        $WorkSheet.Cells["E:E"].Style.HorizontalAlignment="Left"
-        # HorizontalAlignment "Center" of columns A-D and F-M
-        $WorkSheet.Cells["A:D"].Style.HorizontalAlignment="Center"
-        $WorkSheet.Cells["F:M"].Style.HorizontalAlignment="Center"
+        $IMPORT | Export-Csv -Path "$OUTPUT_FOLDER\DSStoreParser\Reports\CSV\Miscellaneous_Info_Report.csv" -NoTypeInformation -Encoding UTF8
+
+        if ($script:EnableExcel)
+        {
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER\DSStoreParser\Reports\XLSX\Miscellaneous_Info_Report.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Miscellaneous Info Report" -CellStyleSB {
+            param($WorkSheet)
+            if ($script:UseExcelStyling)
+            {
+                # BackgroundColor and FontColor for specific cells of TopRow
+                Set-Format -Address $WorkSheet.Cells["A1:M1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+                # HorizontalAlignment "Left" of column A
+                $WorkSheet.Cells["E:E"].Style.HorizontalAlignment="Left"
+                # HorizontalAlignment "Center" of columns A-D and F-M
+                $WorkSheet.Cells["A:D"].Style.HorizontalAlignment="Center"
+                $WorkSheet.Cells["F:M"].Style.HorizontalAlignment="Center"
+            }
+            }
         }
     }
 }
@@ -554,12 +808,20 @@ $Total = ($Data | Select-Object record_type | Measure-Object).Count
 if ($Total -ge "1")
 {
     $Stats = $Data | Group-Object record_type | Select-Object @{Name='Record Type'; Expression={if($_.Name){$_.Name}else{'N/A'}}},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Total)}} | Sort-Object Count -Descending
-    $Stats | Export-Excel -Path "$OUTPUT_FOLDER\DSStoreParser\Stats\RecordType.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Record Type" -CellStyleSB {
-    param($WorkSheet)
-    # BackgroundColor and FontColor for specific cells of TopRow
-    Set-Format -Address $WorkSheet.Cells["A1:C1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-    # HorizontalAlignment "Center" of columns A-C
-    $WorkSheet.Cells["A:C"].Style.HorizontalAlignment="Center"
+    $Stats | Export-Csv -Path "$OUTPUT_FOLDER\DSStoreParser\Stats\RecordType.csv" -NoTypeInformation -Encoding UTF8
+
+    if ($script:EnableExcel)
+    {
+        $Stats | Export-Excel -Path "$OUTPUT_FOLDER\DSStoreParser\Stats\RecordType.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Record Type" -CellStyleSB {
+        param($WorkSheet)
+        if ($script:UseExcelStyling)
+        {
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:C1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-C
+            $WorkSheet.Cells["A:C"].Style.HorizontalAlignment="Center"
+        }
+        }
     }
 
     $RecordTypes = ($Data | Select-Object record_type -Unique | Measure-Object).Count
@@ -600,22 +862,27 @@ Write-Host ""
 Stop-Transcript
 Start-Sleep 0.5
 
-# MessageBox UI
-$MessageBody = "Status: DS_Store Analysis completed."
-$MessageTitle = "DSStore-Analyzer.ps1 (https://lethal-forensics.com/)"
-$ButtonType = "OK"
-$MessageIcon = "Information"
-$Result = [System.Windows.Forms.MessageBox]::Show($MessageBody, $MessageTitle, $ButtonType, $MessageIcon)
-
-if ($Result -eq "OK" ) 
+# Completion message
+if ($script:OnWindows)
 {
-    # Reset Progress Preference
-    $Global:ProgressPreference = $OriginalProgressPreference
-
-    # Reset Windows Title
-    $Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
-    Exit
+    Add-Type -AssemblyName System.Windows.Forms
+    $MessageBody = "Status: DS_Store Analysis completed."
+    $MessageTitle = "DSStore-Analyzer.ps1 (https://lethal-forensics.com/)"
+    $ButtonType = "OK"
+    $MessageIcon = "Information"
+    [void][System.Windows.Forms.MessageBox]::Show($MessageBody, $MessageTitle, $ButtonType, $MessageIcon)
 }
+else
+{
+    Write-Output "[Info]  DS_Store analysis completed."
+}
+
+# Reset Progress Preference
+$Global:ProgressPreference = $OriginalProgressPreference
+
+# Reset Windows Title
+$Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
+Exit
 
 }
 
@@ -626,8 +893,21 @@ if ($Result -eq "OK" )
 
 # Main
 Header
-Invoke-DSStoreParser
-Get-Statistics
+Invoke-DSStoreInventory
+
+if ($script:OnWindows -and (Test-Path "$($script:DSStoreParser)"))
+{
+    Invoke-DSStoreParser
+    # Statistics depend on DSStoreParser TSV output
+    if (Test-Path "$OUTPUT_FOLDER\DSStoreParser\Reports\TSV")
+    {
+        Get-Statistics
+    }
+}
+else
+{
+    Write-Host "[Info]  Inventory report was generated (CSV; XLSX optional)." -ForegroundColor Yellow
+}
 Footer
 
 #############################################################################################################################################################################################

@@ -1,4 +1,4 @@
-﻿# FSEvents-Analyzer v0.1
+# FSEvents-Analyzer v0.1
 #
 # @author:    Martin Willing
 # @copyright: Copyright (c) 2025 Martin Willing. All rights reserved. Licensed under the MIT license.
@@ -90,7 +90,8 @@
 [CmdletBinding()]
 Param(
     [String]$InputDir,
-    [String]$OutputDir
+    [String]$OutputDir,
+    [switch]$NoExcel = $true
 )
 
 #endregion CmdletBinding
@@ -125,26 +126,67 @@ else
     $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Definition
 }
 
-# Colors
-Add-Type -AssemblyName System.Drawing
-$script:Green  = [System.Drawing.Color]::FromArgb(0,176,80) # Green
-$script:Orange = [System.Drawing.Color]::FromArgb(255,192,0) # Orange
+# Detect Operating System
+# NOTE: Do NOT use names like IsWindows/IsMacOS/IsLinux here because PowerShell defines read-only automatic variables with those names.
+$script:OnWindows = $false
+$script:OnMacOS   = $false
+$script:OnLinux   = $false
+
+if ($PSVersionTable.PSVersion.Major -ge 6)
+{
+    $script:OnWindows = $IsWindows
+    $script:OnMacOS   = $IsMacOS
+    $script:OnLinux   = $IsLinux
+}
+else
+{
+    # Windows PowerShell 5.1
+    $script:OnWindows = $true
+}
+
+# Excel export toggle (optional)
+$script:EnableExcel = $false
+if (-not $NoExcel -and (Get-Module -ListAvailable -Name ImportExcel))
+{
+    $script:EnableExcel = $true
+}
+
+# Colors / Styling (only supported on Windows)
+$script:UseExcelStyling = $false
+if ($script:OnWindows)
+{
+    Add-Type -AssemblyName System.Drawing
+    $script:Green  = [System.Drawing.Color]::FromArgb(0,176,80) # Green
+    $script:Orange = [System.Drawing.Color]::FromArgb(255,192,0) # Orange
+    if ($script:EnableExcel)
+    {
+        $script:UseExcelStyling = $true
+    }
+}
 
 # Output Directory
 if (!($OutputDir))
 {
-    $script:OUTPUT_FOLDER = "$env:USERPROFILE\Desktop\FSEvents-Analyzer" # Default
+    if ($script:OnMacOS -or $script:OnLinux)
+    {
+        $script:OUTPUT_FOLDER = Join-Path (Join-Path $HOME "Desktop") "FSEvents-Analyzer"
+    }
+    else
+    {
+        $script:OUTPUT_FOLDER = Join-Path (Join-Path $env:USERPROFILE "Desktop") "FSEvents-Analyzer"
+    }
 }
 else
 {
-    if ($OutputDir -cnotmatch '.+(?=\\)') 
+    # Validate path - accept both Windows and Unix paths
+    if ($OutputDir -cnotmatch '.+(?=[/\\])' -and $OutputDir -notmatch '^[/~]') 
     {
         Write-Host "[Error] You must provide a valid directory path." -ForegroundColor Red
         Exit
     }
     else
     {
-        $script:OUTPUT_FOLDER = "$OutputDir\FSEvents-Analyzer" # Custom
+        $script:OUTPUT_FOLDER = Join-Path $OutputDir "FSEvents-Analyzer"
     }
 }
 
@@ -154,23 +196,48 @@ else
 $script:ReportQueries = "$SCRIPT_DIR\Tools\FSEventsParser\report_queries.json"
 
 # FSEventsParser-rs
-$script:FSEventsParser = "$SCRIPT_DIR\Tools\FSEventsParser-rs\fsevents_parser_rs.exe"
+$script:FSEventsParser = Join-Path $SCRIPT_DIR "Tools/FSEventsParser-rs/fsevents_parser_rs.exe"
 
 # SQLite3
-$script:SQLite3 = "$SCRIPT_DIR\Tools\SQLite\sqlite3.exe"
+if ($script:OnMacOS -or $script:OnLinux)
+{
+    # Use system sqlite3
+    $script:SQLite3 = (Get-Command sqlite3 -ErrorAction SilentlyContinue).Source
+    if (-not $script:SQLite3)
+    {
+        $script:SQLite3 = "/usr/bin/sqlite3"
+    }
+}
+else
+{
+    $script:SQLite3 = Join-Path $SCRIPT_DIR "Tools/SQLite/sqlite3.exe"
+}
 
 # xsv
-$script:xsv = "$SCRIPT_DIR\Tools\xsv\xsv.exe"
+if ($script:OnMacOS -or $script:OnLinux)
+{
+    $script:xsv = (Get-Command xsv -ErrorAction SilentlyContinue).Source
+    if (-not $script:xsv)
+    {
+        # Use compatibility function if xsv is not installed
+        $script:xsv = "script:Invoke-XsvCompat"
+    }
+}
+else
+{
+    $script:xsv = Join-Path $SCRIPT_DIR "Tools/xsv/xsv.exe"
+}
 
 # Configuration File (JSON)
-if(!(Test-Path "$PSScriptRoot\Config.json"))
+$ConfigPath = Join-Path $PSScriptRoot "Config.json"
+if(!(Test-Path $ConfigPath))
 {
     Write-Host "[Error] Config.json NOT found." -ForegroundColor Red
     Exit
 }
 else
 {
-    $Config = Get-Content "$PSScriptRoot\Config.json" | ConvertFrom-Json
+    $Config = Get-Content $ConfigPath | ConvertFrom-Json
 
     # BackgroundColor
     if ($Config.ImportExcel.BackgroundColor)
@@ -182,9 +249,13 @@ else
         }
     }
 
-    # Excel - Color Scheme
-    $script:BackgroundColor = [System.Drawing.Color]$Config.ImportExcel.BackgroundColor
-    $script:FontColor       = $Config.ImportExcel.FontColor
+    # Excel - Color Scheme (only used for styling on Windows)
+    if ($script:UseExcelStyling)
+    {
+        $rgbValues = $Config.ImportExcel.BackgroundColor -split ','
+        $script:BackgroundColor = [System.Drawing.Color]::FromArgb([int]$rgbValues[0], [int]$rgbValues[1], [int]$rgbValues[2])
+        $script:FontColor = $Config.ImportExcel.FontColor
+    }
 }
 
 #endregion Declarations
@@ -200,38 +271,78 @@ Function Header {
 $DefaultWindowsTitle = $Host.UI.RawUI.WindowTitle
 $Host.UI.RawUI.WindowTitle = "FSEvents-Analyzer v0.1 - Automated Forensic Analysis of FSEvent Logs for DFIR"
 
-# Check if the PowerShell script is being run with admin rights
-if (!([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))
+# Check if the PowerShell script is being run with elevated privileges
+if ($script:OnMacOS -or $script:OnLinux)
 {
-    Write-Host "[Error] This PowerShell script must be run with admin rights." -ForegroundColor Red
-    Exit
+    $currentUser = & id -u
+    if ($currentUser -ne "0")
+    {
+        Write-Host "[Warning] This script may require elevated privileges (sudo) for some operations." -ForegroundColor Yellow
+        # Don't exit - allow the script to continue and fail gracefully if needed
+    }
+}
+else
+{
+    # Windows admin check
+    if (!([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))
+    {
+        Write-Host "[Error] This PowerShell script must be run with admin rights." -ForegroundColor Red
+        Exit
+    }
 }
 
-# Check if PowerShell module 'ImportExcel' is installed
-if (!(Get-Module -ListAvailable -Name ImportExcel))
+# ImportExcel is optional
+if (-not $script:EnableExcel)
 {
-    Write-Host "[Error] Please install 'ImportExcel' PowerShell module." -ForegroundColor Red
-    Write-Host "[Info]  Check out: https://github.com/dfinke/ImportExcel"
-    Exit
+    if ($NoExcel)
+    {
+        if ($PSBoundParameters.ContainsKey('NoExcel'))
+        {
+            Write-Host "[Info]  -NoExcel specified. XLSX output will be skipped." -ForegroundColor Yellow
+        }
+        else
+        {
+            Write-Host "[Info]  XLSX output is disabled by default. CSV/TSV output will be created." -ForegroundColor Yellow
+            Write-Host "[Info]  To enable XLSX (optional): install ImportExcel and run with -NoExcel:`$false" -ForegroundColor Yellow
+        }
+    }
+    else
+    {
+        Write-Host "[Info]  ImportExcel not installed. XLSX output will be skipped." -ForegroundColor Yellow
+        Write-Host "[Info]  Install (optional): Install-Module -Name ImportExcel -Scope CurrentUser" -ForegroundColor Yellow
+    }
 }
 
-# Check if sqlite3.exe exists
+# If Excel export is disabled, define no-op stubs so the script can still run (CSV/TSV output remains)
+if (-not $script:EnableExcel)
+{
+    Function Export-Excel {
+        [CmdletBinding()]
+        param(
+            [Parameter(ValueFromPipeline = $true)]
+            $InputObject,
+
+            [string]$Path,
+            [object]$NoNumberConversion,
+            [switch]$FreezeTopRow,
+            [switch]$BoldTopRow,
+            [switch]$AutoSize,
+            [switch]$AutoFilter,
+            [string]$WorkSheetname,
+            [ScriptBlock]$CellStyleSB
+        )
+        process { return }
+    }
+}
+
+# Check if sqlite3 exists
 if (!(Test-Path "$($SQLite3)"))
 {
-    Write-Host "[Error] sqlite3.exe NOT found." -ForegroundColor Red
-    Stop-Transcript
-    $Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
+    Write-Host "[Error] sqlite3 NOT found." -ForegroundColor Red
     Exit
 }
 
-# Check if xsv.exe exists
-if (!(Test-Path "$($xsv)"))
-{
-    Write-Host "[Error] xsv.exe NOT found." -ForegroundColor Red
-    Stop-Transcript
-    $Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
-    Exit
-}
+# xsv is optional (we fall back to a compatibility function on macOS/Linux)
 
 # Flush Output Directory
 if (Test-Path "$OUTPUT_FOLDER")
@@ -256,44 +367,144 @@ Function script:Get-FileSize
     Else {""}
 }
 
+# xsv compatibility function (used if xsv isn't installed)
+Function script:Invoke-XsvCompat {
+    param(
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [object[]]$Args
+    )
+
+    # Only supports: xsv count [-d DELIM] <file>
+    if (-not $Args -or $Args.Count -lt 2) { return 0 }
+    if ($Args[0] -ne "count") { return 0 }
+
+    $delim = ","
+    $path = $null
+
+    if ($Args.Count -ge 4 -and $Args[1] -eq "-d")
+    {
+        $delim = [string]$Args[2]
+        $path = [string]$Args[3]
+    }
+    else
+    {
+        $path = [string]$Args[1]
+    }
+
+    if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path $path)) { return 0 }
+
+    try
+    {
+        $lineCount = 0
+        foreach ($line in [System.IO.File]::ReadLines($path))
+        {
+            $lineCount++
+        }
+        if ($lineCount -le 1) { return 0 }
+        return ($lineCount - 1)
+    }
+    catch
+    {
+        return 0
+    }
+}
+
 # Add the required MessageBox class (Windows PowerShell)
-Add-Type -AssemblyName System.Windows.Forms
+if ($script:OnWindows)
+{
+    Add-Type -AssemblyName System.Windows.Forms
+}
+
+# macOS folder picker (Explorer-like) via osascript
+Function script:Select-FolderMacOS {
+    param(
+        [string]$Prompt = "Choose a folder"
+    )
+    try
+    {
+        $escapedPrompt = $Prompt.Replace('"','\"')
+        $result = & osascript -e "POSIX path of (choose folder with prompt `"$escapedPrompt`")" 2>$null
+        if ([string]::IsNullOrWhiteSpace($result)) { return $null }
+        return ($result.Trim())
+    }
+    catch
+    {
+        return $null
+    }
+}
 
 # Select folder containing FSEvent Data
 if(!($InputDir))
 {
-    Function Get-FolderPath($InitialDirectory)
+    if ($script:OnWindows)
     {
-        [System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms") | Out-Null
-        $script:OpenFolderDialog = New-Object System.Windows.Forms.FolderBrowserDialog
-        $OpenFolderDialog.Description = 'Select a folder containing FSEvent Data'
-        $OpenFolderDialog.ShowNewFolderButton = $false
-        $OpenFolderDialog.RootFolder = "MyComputer"
-        $Topmost = New-Object System.Windows.Forms.Form
-        $Topmost.TopMost = $True
-        $Topmost.MinimizeBox = $True
-        $OpenFolderDialog.ShowDialog($Topmost)
-    }
+        Function Get-FolderPath($InitialDirectory)
+        {
+            [System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms") | Out-Null
+            $script:OpenFolderDialog = New-Object System.Windows.Forms.FolderBrowserDialog
+            $OpenFolderDialog.Description = 'Select a folder containing FSEvent Data'
+            $OpenFolderDialog.ShowNewFolderButton = $false
+            $OpenFolderDialog.RootFolder = "MyComputer"
+            $Topmost = New-Object System.Windows.Forms.Form
+            $Topmost.TopMost = $True
+            $Topmost.MinimizeBox = $True
+            $OpenFolderDialog.ShowDialog($Topmost)
+        }
 
-    $Result = Get-FolderPath
-
-    if($Result -eq "OK")
-    {
-        $script:FolderPath = $OpenFolderDialog.SelectedPath
+        $Result = Get-FolderPath
+        if($Result -eq "OK")
+        {
+            $script:FolderPath = $OpenFolderDialog.SelectedPath
+        }
+        else
+        {
+            $Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
+            Exit
+        }
     }
     else
     {
-        $Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
-        Exit
+        if ($script:OnMacOS)
+        {
+            $picked = Select-FolderMacOS -Prompt "Select a folder containing FSEvent Data (.fseventsd)"
+            if ($picked)
+            {
+                $script:FolderPath = $picked
+            }
+            else
+            {
+                Write-Host ""
+                $script:FolderPath = Read-Host "Enter folder path containing FSEvent data"
+            }
+        }
+        else
+        {
+            $script:FolderPath = Read-Host "Enter folder path containing FSEvent data"
+        }
+        if ([string]::IsNullOrWhiteSpace($script:FolderPath))
+        {
+            Write-Host "[Error] No folder path provided." -ForegroundColor Red
+            Exit
+        }
+        # Expand ~ to home directory
+        if ($script:FolderPath.StartsWith("~"))
+        {
+            $script:FolderPath = $script:FolderPath.Replace("~", $HOME)
+        }
     }
 }
 else
 {
     $script:FolderPath = $InputDir
+    # Expand ~ to home directory
+    if ($script:FolderPath.StartsWith("~"))
+    {
+        $script:FolderPath = $script:FolderPath.Replace("~", $HOME)
+    }
 }
 
 # Create a record of your PowerShell session to a text file
-Start-Transcript -Path "$OUTPUT_FOLDER\Transcript.txt"
+Start-Transcript -Path "$OUTPUT_FOLDER/Transcript.txt"
 
 # Get Start Time
 $script:startTime = (Get-Date)
@@ -391,7 +602,7 @@ Function Invoke-FSEventsParser {
 $StartTime_FSEventsParser = (Get-Date)
 
 # FSEventsParser-rs by Houwenda
-if (Test-Path "$($FSEventsParser)")
+if ($script:OnWindows -and (Test-Path "$($FSEventsParser)"))
 {
     Write-Output "[Info]  Parsing FSEvents Data w/ FSEventsParser-rs ..."
     New-Item "$OUTPUT_FOLDER\FSEventsParser-rs" -ItemType Directory -Force | Out-Null
@@ -908,7 +1119,7 @@ if (Test-Path "$($FSEventsParser)")
 }
 else
 {
-    Write-Host "[Error] fsevents_parser_rs.exe NOT found." -ForegroundColor Red
+    Write-Host "[Info]  fsevents_parser_rs.exe is Windows-only. Skipping FSEventsParser-rs." -ForegroundColor Yellow
 }
 
 $EndTime_FSEventsParser = (Get-Date)
@@ -1356,22 +1567,27 @@ Write-Host ""
 Stop-Transcript
 Start-Sleep 0.5
 
-# MessageBox UI
-$MessageBody = "Status: FSEvents Analysis completed."
-$MessageTitle = "FSEvents-Analyzer.ps1 (https://lethal-forensics.com/)"
-$ButtonType = "OK"
-$MessageIcon = "Information"
-$Result = [System.Windows.Forms.MessageBox]::Show($MessageBody, $MessageTitle, $ButtonType, $MessageIcon)
-
-if ($Result -eq "OK" ) 
+# Completion message
+if ($script:OnWindows)
 {
-    # Reset Progress Preference
-    $Global:ProgressPreference = $OriginalProgressPreference
-
-    # Reset Windows Title
-    $Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
-    Exit
+    Add-Type -AssemblyName System.Windows.Forms
+    $MessageBody = "Status: FSEvents Analysis completed."
+    $MessageTitle = "FSEvents-Analyzer.ps1 (https://lethal-forensics.com/)"
+    $ButtonType = "OK"
+    $MessageIcon = "Information"
+    [void][System.Windows.Forms.MessageBox]::Show($MessageBody, $MessageTitle, $ButtonType, $MessageIcon)
 }
+else
+{
+    Write-Output "[Info]  FSEvents analysis completed."
+}
+
+# Reset Progress Preference
+$Global:ProgressPreference = $OriginalProgressPreference
+
+# Reset Windows Title
+$Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
+Exit
 
 }
 
@@ -1382,7 +1598,10 @@ if ($Result -eq "OK" )
 
 # Main
 Header
-Invoke-FSEventsParser
+if ($script:OnWindows -and (Test-Path "$($script:FSEventsParser)"))
+{
+    Invoke-FSEventsParser
+}
 Invoke-FSEParser
 Footer
 

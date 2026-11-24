@@ -1,4 +1,4 @@
-﻿# BTM-Analyzer v0.1
+# BTM-Analyzer v0.2
 #
 # @author:    Martin Willing
 # @copyright: Copyright (c) 2025 Martin Willing. All rights reserved. Licensed under the MIT license.
@@ -26,9 +26,14 @@
 # Release Date: 2025-11-20
 # Initial Release
 #
+# Version 0.2
+# Release Date: 2025-12-11
+# Added: Cross-platform support for macOS and Windows
+#
 #
 # Tested on Windows 10 Pro (x64) Version 22H2 (10.0.19045.6456) and PowerShell 5.1 (5.1.19041.6456)
 # Tested on Windows 10 Pro (x64) Version 22H2 (10.0.19045.6456) and PowerShell 7.5.4
+# Tested on macOS with PowerShell 7.x
 #
 #
 #############################################################################################################################################################################################
@@ -36,7 +41,7 @@
 
 <#
 .SYNOPSIS
-  BTM-Analyzer v0.1 - Automated Forensic Analysis of BTM Dump File
+  BTM-Analyzer v0.2 - Automated Forensic Analysis of BTM Dump File
 
 .DESCRIPTION
   BTM-Analyzer.ps1 is a PowerShell script utilized to simplify the analysis of the dumped BTM database (Background Task Management --> Persistence).
@@ -46,7 +51,7 @@
   CLI: sudo sfltool dumpbtm > ~/Desktop/btm.txt
 
 .PARAMETER OutputDir
-  Specifies the output directory. Default is "$env:USERPROFILE\Desktop\BTM-Analyzer".
+  Specifies the output directory. Default is "$HOME/Desktop/BTM-Analyzer" (macOS) or "$env:USERPROFILE\Desktop\BTM-Analyzer" (Windows).
 
   Note: The subdirectory 'BTM-Analyzer' is automatically created.
 
@@ -54,13 +59,13 @@
   Specifies the path to the input file (btm.txt).
 
 .EXAMPLE
-  PS> .\BTM-Analyzer.ps1
+  PS> ./BTM-Analyzer.ps1
 
 .EXAMPLE
-  PS> .\BTM-Analyzer.ps1 -Path "$env:USERPROFILE\Desktop\btm.txt"
+  PS> ./BTM-Analyzer.ps1 -Path "$HOME/Desktop/btm.txt"
 
 .EXAMPLE
-  PS> .\BTM-Analyzer.ps1 -Path "H:\macos-collector\Aftermath_Collection\btm.txt" -OutputDir "H:\MacOS-Analyzer-Suite"
+  PS> ./BTM-Analyzer.ps1 -Path "/path/to/btm.txt" -OutputDir "/path/to/output"
 
 .NOTES
   Author - Martin Willing
@@ -77,7 +82,8 @@
 [CmdletBinding()]
 Param(
     [String]$Path,
-    [String]$OutputDir
+    [String]$OutputDir,
+    [switch]$NoExcel = $true
 )
 
 #endregion CmdletBinding
@@ -112,52 +118,98 @@ else
     $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Definition
 }
 
-# Colors
-Add-Type -AssemblyName System.Drawing
-$script:Green  = [System.Drawing.Color]::FromArgb(0,176,80) # Green
-$script:Orange = [System.Drawing.Color]::FromArgb(255,192,0) # Orange
+# Detect Operating System
+# NOTE: Do NOT use names like IsWindows/IsMacOS/IsLinux here because PowerShell defines read-only automatic variables with those names.
+$script:OnWindows = $false
+$script:OnMacOS   = $false
+$script:OnLinux   = $false
+
+if ($PSVersionTable.PSVersion.Major -ge 6)
+{
+    $script:OnWindows = $IsWindows
+    $script:OnMacOS   = $IsMacOS
+    $script:OnLinux   = $IsLinux
+}
+else
+{
+    # Windows PowerShell 5.1
+    $script:OnWindows = $true
+}
+
+# Excel export toggle (optional)
+$script:EnableExcel = $false
+if (-not $NoExcel -and (Get-Module -ListAvailable -Name ImportExcel))
+{
+    $script:EnableExcel = $true
+}
+
+# Colors / Styling (only supported on Windows)
+$script:UseExcelStyling = $false
+if ($script:OnWindows)
+{
+    Add-Type -AssemblyName System.Drawing
+    $script:Green  = [System.Drawing.Color]::FromArgb(0,176,80)
+    $script:Orange = [System.Drawing.Color]::FromArgb(255,192,0)
+    if ($script:EnableExcel)
+    {
+        $script:UseExcelStyling = $true
+    }
+}
 
 # Output Directory
 if (!($OutputDir))
 {
-    $script:OUTPUT_FOLDER = "$env:USERPROFILE\Desktop\BTM-Analyzer" # Default
+    if ($script:OnMacOS -or $script:OnLinux)
+    {
+        $script:OUTPUT_FOLDER = "$HOME/Desktop/BTM-Analyzer"
+    }
+    else
+    {
+        $script:OUTPUT_FOLDER = "$env:USERPROFILE\Desktop\BTM-Analyzer"
+    }
 }
 else
 {
-    if ($OutputDir -cnotmatch '.+(?=\\)') 
+    # Validate path - accept both Windows and Unix paths
+    if ($OutputDir -cnotmatch '.+(?=[/\\])' -and $OutputDir -notmatch '^[/~]') 
     {
         Write-Host "[Error] You must provide a valid directory path." -ForegroundColor Red
         Exit
     }
     else
     {
-        $script:OUTPUT_FOLDER = "$OutputDir\BTM-Analyzer" # Custom
+        $script:OUTPUT_FOLDER = Join-Path $OutputDir "BTM-Analyzer"
     }
 }
 
 # Configuration File (JSON)
-if(!(Test-Path "$PSScriptRoot\Config.json"))
+$ConfigPath = Join-Path $PSScriptRoot "Config.json"
+if(!(Test-Path $ConfigPath))
 {
     Write-Host "[Error] Config.json NOT found." -ForegroundColor Red
     Exit
 }
 else
 {
-    $Config = Get-Content "$PSScriptRoot\Config.json" | ConvertFrom-Json
+    $Config = Get-Content $ConfigPath | ConvertFrom-Json
 
     # BackgroundColor
     if ($Config.ImportExcel.BackgroundColor)
     {
-        if ($Config.ImportExcel.BackgroundColor -cnotmatch '^(([0-1]?[0-9]?[0-9])|([2][0-4][0-9])|(25[0-5])),(([0-1]?[0-9]?[0-9])|([2][0-4][0-9])|(25[0-5])),(([0-1]?[0-9]?[0-9])|([2][0-4][0-9])|(25[0-5]))$') # <0-255>,<0-255>,<0-255>
+        if ($Config.ImportExcel.BackgroundColor -cnotmatch '^(([0-1]?[0-9]?[0-9])|([2][0-4][0-9])|(25[0-5])),(([0-1]?[0-9]?[0-9])|([2][0-4][0-9])|(25[0-5])),(([0-1]?[0-9]?[0-9])|([2][0-4][0-9])|(25[0-5]))$')
         {
             Write-Host "[Error] You must provide a valid RGB Color Code." -ForegroundColor Red
             Return
         }
     }
 
-    # Excel - Color Scheme
-    $script:BackgroundColor = [System.Drawing.Color]$Config.ImportExcel.BackgroundColor
-    $script:FontColor       = $Config.ImportExcel.FontColor
+    # Excel - Color Scheme (only used for styling on Windows)
+    if ($script:UseExcelStyling)
+    {
+        $rgbValues = $Config.ImportExcel.BackgroundColor -split ','
+        $script:BackgroundColor = [System.Drawing.Color]::FromArgb([int]$rgbValues[0], [int]$rgbValues[1], [int]$rgbValues[2])
+        $script:FontColor = $Config.ImportExcel.FontColor
+    }
 }
 
 #endregion Declarations
@@ -171,21 +223,48 @@ Function Header {
 
 # Windows Title
 $DefaultWindowsTitle = $Host.UI.RawUI.WindowTitle
-$Host.UI.RawUI.WindowTitle = "BTM-Analyzer v0.1 - Automated Forensic Analysis of BTM Dump File"
+$Host.UI.RawUI.WindowTitle = "BTM-Analyzer v0.2 - Automated Forensic Analysis of BTM Dump File"
 
-# Check if the PowerShell script is being run with admin rights
-if (!([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))
+# Check if the PowerShell script is being run with elevated privileges
+if ($script:OnMacOS -or $script:OnLinux)
 {
-    Write-Host "[Error] This PowerShell script must be run with admin rights." -ForegroundColor Red
-    Exit
+    # On macOS/Linux, check if running as root or with sudo
+    $currentUser = & id -u
+    if ($currentUser -ne "0")
+    {
+        Write-Host "[Warning] This script may require elevated privileges (sudo) for some operations." -ForegroundColor Yellow
+    }
+}
+else
+{
+    # Windows admin check
+    if (!([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))
+    {
+        Write-Host "[Error] This PowerShell script must be run with admin rights." -ForegroundColor Red
+        Exit
+    }
 }
 
-# Check if PowerShell module 'ImportExcel' is installed
-if (!(Get-Module -ListAvailable -Name ImportExcel))
+# ImportExcel is optional
+if (-not $script:EnableExcel)
 {
-    Write-Host "[Error] Please install 'ImportExcel' PowerShell module." -ForegroundColor Red
-    Write-Host "[Info]  Check out: https://github.com/dfinke/ImportExcel"
-    Exit
+    if ($NoExcel)
+    {
+        if ($PSBoundParameters.ContainsKey('NoExcel'))
+        {
+            Write-Host "[Info]  -NoExcel specified. XLSX output will be skipped." -ForegroundColor Yellow
+        }
+        else
+        {
+            Write-Host "[Info]  XLSX output is disabled by default. CSV output will be created." -ForegroundColor Yellow
+            Write-Host "[Info]  To enable XLSX (optional): install ImportExcel and run with -NoExcel:`$false" -ForegroundColor Yellow
+        }
+    }
+    else
+    {
+        Write-Host "[Info]  ImportExcel not installed. XLSX output will be skipped." -ForegroundColor Yellow
+        Write-Host "[Info]  Install (optional): Install-Module -Name ImportExcel -Scope CurrentUser" -ForegroundColor Yellow
+    }
 }
 
 # Flush Output Directory
@@ -211,43 +290,71 @@ Function script:Get-FileSize
     Else {""}
 }
 
-# Add the required MessageBox class (Windows PowerShell)
-Add-Type -AssemblyName System.Windows.Forms
-
 # Select BTM Dump (btm.txt)
 if(!($Path))
 {
-    Function Get-LogFile($InitialDirectory)
-    { 
-        [System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms") | Out-Null
-        $OpenFileDialog = New-Object System.Windows.Forms.OpenFileDialog
-        $OpenFileDialog.InitialDirectory = $InitialDirectory
-        $OpenFileDialog.Filter = "BTM Dump|btm.txt|All Files (*.*)|*.*"
-        $OpenFileDialog.ShowDialog()
-        $OpenFileDialog.Filename
-        $OpenFileDialog.ShowHelp = $true
-        $OpenFileDialog.Multiselect = $false
-    }
-
-    $Result = Get-LogFile
-
-    if($Result -eq "OK")
+    if ($script:OnWindows)
     {
-        $script:LogFile = $Result[1]
+        # Windows - Use OpenFileDialog
+        Add-Type -AssemblyName System.Windows.Forms
+        Function Get-LogFile($InitialDirectory)
+        { 
+            [System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms") | Out-Null
+            $OpenFileDialog = New-Object System.Windows.Forms.OpenFileDialog
+            $OpenFileDialog.InitialDirectory = $InitialDirectory
+            $OpenFileDialog.Filter = "BTM Dump|btm.txt|All Files (*.*)|*.*"
+            $OpenFileDialog.ShowDialog()
+            $OpenFileDialog.Filename
+            $OpenFileDialog.ShowHelp = $true
+            $OpenFileDialog.Multiselect = $false
+        }
+
+        $Result = Get-LogFile
+
+        if($Result -eq "OK")
+        {
+            $script:LogFile = $Result[1]
+        }
+        else
+        {
+            $Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
+            Exit
+        }
     }
     else
     {
-        $Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
-        Exit
+        # macOS/Linux - Prompt for path (keep simple for .txt; no chooser required)
+        Write-Host ""
+        Write-Host "[Info]  Please provide the path to the BTM dump file (btm.txt)." -ForegroundColor Cyan
+        Write-Host "[Info]  Generate with: sudo sfltool dumpbtm > ~/Desktop/btm.txt" -ForegroundColor Cyan
+        Write-Host ""
+        $script:LogFile = Read-Host "Enter path to btm.txt"
+        
+        if ([string]::IsNullOrWhiteSpace($script:LogFile))
+        {
+            Write-Host "[Error] No path provided." -ForegroundColor Red
+            Exit
+        }
+        
+        # Expand ~ to home directory
+        if ($script:LogFile.StartsWith("~"))
+        {
+            $script:LogFile = $script:LogFile.Replace("~", $HOME)
+        }
     }
 }
 else
 {
     $script:LogFile = $Path
+    # Expand ~ to home directory
+    if ($script:LogFile.StartsWith("~"))
+    {
+        $script:LogFile = $script:LogFile.Replace("~", $HOME)
+    }
 }
 
 # Create a record of your PowerShell session to a text file
-Start-Transcript -Path "$OUTPUT_FOLDER\Transcript.txt"
+Start-Transcript -Path "$OUTPUT_FOLDER/Transcript.txt"
 
 # Get Start Time
 $script:startTime = (Get-Date)
@@ -267,7 +374,7 @@ Write-Output "$Logo"
 Write-Output ""
 
 # Header
-Write-Output "BTM-Analyzer v0.1 - Automated Forensic Analysis of BTM Dump File for DFIR"
+Write-Output "BTM-Analyzer v0.2 - Automated Forensic Analysis of BTM Dump File for DFIR"
 Write-Output "(c) 2025 Martin Willing at Lethal-Forensics (https://lethal-forensics.com/)"
 Write-Output ""
 
@@ -323,8 +430,11 @@ if (!($Extension -eq ".txt" ))
 
 $FileName = [IO.Path]::GetFileName($LogFile)
 Write-Output "[Info]  Processing Background Task Management Dump File ($FileName) ..."
-New-Item "$OUTPUT_FOLDER\CSV" -ItemType Directory -Force | Out-Null
-New-Item "$OUTPUT_FOLDER\XLSX" -ItemType Directory -Force | Out-Null
+New-Item "$OUTPUT_FOLDER/CSV" -ItemType Directory -Force | Out-Null
+if ($script:EnableExcel)
+{
+    New-Item "$OUTPUT_FOLDER/XLSX" -ItemType Directory -Force | Out-Null
+}
 
 # MD5 Hash
 $MD5 = (Get-FileHash -LiteralPath "$LogFile" -Algorithm MD5).Hash
@@ -347,7 +457,7 @@ Write-Output "[Info]  Total Input Size: $InputSize"
 $Reader = New-Object IO.StreamReader "$LogFile"
 while($Reader.ReadLine() -ne $null){ $TotalLines++ }
 ($Reader.Dispose())
-$Rows = '{0:N0}' -f $TotalLines | ForEach-Object {$_ -replace ' ','.'}
+$Rows = '{0:N0}' -f $TotalLines | ForEach-Object {$_ -replace ' ','.'}
 Write-Output "[Info]  Total Lines: $Rows"
 
 # Count User IDs
@@ -359,11 +469,11 @@ $Total = (Get-Content "$LogFile" | Select-String -Pattern "^ #\d+:" | Measure-Ob
 Write-Output "[Info]  $Total Background Item(s) found"
 
 # Background Items per User
-New-Item "$OUTPUT_FOLDER\Users" -ItemType Directory -Force | Out-Null
+New-Item "$OUTPUT_FOLDER/Users" -ItemType Directory -Force | Out-Null
 $Objects = (Get-Content "$LogFile" -Raw) -split "`n`n`n" | Where-Object { $_ -match "========================" }
 ForEach ($Object in $Objects) {
     $UID = $Object.Split("`n`n") | Select-String -Pattern "Records for UID" | ForEach-Object{($_ -split "\s+")[4]}
-    $Object | Out-File "$OUTPUT_FOLDER\Users\$UID.txt" -Encoding UTF8
+    $Object | Out-File "$OUTPUT_FOLDER/Users/$UID.txt" -Encoding UTF8
 }
 
 # User ID's (UID)
@@ -411,22 +521,25 @@ ForEach($Object in $Objects)
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER\CSV\BTM.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/CSV/BTM.csv" -NoTypeInformation -Encoding UTF8
 }
 
 # XLSX
-if (Test-Path "$OUTPUT_FOLDER\CSV\BTM.csv")
+if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/CSV/BTM.csv"))
 {
-    if ((Get-Item "$OUTPUT_FOLDER\CSV\BTM.csv").Length -gt 0)
+    if ((Get-Item "$OUTPUT_FOLDER/CSV/BTM.csv").Length -gt 0)
     {
-        $IMPORT = Import-Csv "$OUTPUT_FOLDER\CSV\BTM.csv" -Delimiter ","
-        $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER\XLSX\BTM.xlsx" -NoHyperLinkConversion * -FreezePane 2,5 -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Background Items" -CellStyleSB {
+        $IMPORT = Import-Csv "$OUTPUT_FOLDER/CSV/BTM.csv" -Delimiter ","
+        $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/XLSX/BTM.xlsx" -NoHyperLinkConversion * -FreezePane 2,5 -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Background Items" -CellStyleSB {
         param($WorkSheet)
-        # BackgroundColor and FontColor for specific cells of TopRow
-        Set-Format -Address $WorkSheet.Cells["A1:Q1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-        # HorizontalAlignment "Center" of columns A-K and M-Q
-        $WorkSheet.Cells["A:K"].Style.HorizontalAlignment="Center"
-        $WorkSheet.Cells["M:Q"].Style.HorizontalAlignment="Center"
+        if ($script:UseExcelStyling)
+        {
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:Q1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-K and M-Q
+            $WorkSheet.Cells["A:K"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["M:Q"].Style.HorizontalAlignment="Center"
+        }
         }
     }
 }
@@ -443,30 +556,32 @@ if (Test-Path "$OUTPUT_FOLDER\CSV\BTM.csv")
 Function Get-Statistics {
 
 # Stats
-New-Item "$OUTPUT_FOLDER\Stats" -ItemType Directory -Force | Out-Null
+New-Item "$OUTPUT_FOLDER/Stats" -ItemType Directory -Force | Out-Null
 
 # Data Import
-$BTM = Import-Csv "$OUTPUT_FOLDER\CSV\BTM.csv" -Delimiter "," -Encoding UTF8
-
-# Count Login Items
-#$LoginItems = ($BTM | Where-Object { $_.Type -eq "login item (0x4)" } | Measure-Object).Count
-#Write-Output "[Info]  $LoginItems Login Item(s) found"
-
-# Count Extensions (Apple and Third-Party Extensions)
-#$Extension = ($BTM | Where-Object { $_."Bundle Identifier" -match "Extension$" } | Measure-Object).Count
-#Write-Output "[Info]  $Extension Extension(s) found"
+$BTM = Import-Csv "$OUTPUT_FOLDER/CSV/BTM.csv" -Delimiter "," -Encoding UTF8
 
 # Developer Name (Stats)
 $Total = ($BTM | Select-Object "Developer Name" | Measure-Object).Count
 if ($Total -ge "1")
 {
     $Stats = $BTM | Group-Object "Developer Name" | Select-Object @{Name='Developer Name'; Expression={if($_.Name){$_.Name}else{'N/A'}}},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Total)}} | Sort-Object Count -Descending
-    $Stats | Export-Excel -Path "$OUTPUT_FOLDER\Stats\DeveloperName.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Developer Name" -CellStyleSB {
-    param($WorkSheet)
-    # BackgroundColor and FontColor for specific cells of TopRow
-    Set-Format -Address $WorkSheet.Cells["A1:C1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-    # HorizontalAlignment "Center" of columns A-C
-    $WorkSheet.Cells["A:C"].Style.HorizontalAlignment="Center"
+    if ($script:EnableExcel)
+    {
+        $Stats | Export-Excel -Path "$OUTPUT_FOLDER/Stats/DeveloperName.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Developer Name" -CellStyleSB {
+        param($WorkSheet)
+        if ($script:UseExcelStyling)
+        {
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:C1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-C
+            $WorkSheet.Cells["A:C"].Style.HorizontalAlignment="Center"
+        }
+        }
+    }
+    else
+    {
+        $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/DeveloperName.csv" -NoTypeInformation -Encoding UTF8
     }
 }
 
@@ -475,12 +590,22 @@ $Total = ($BTM | Select-Object Name | Measure-Object).Count
 if ($Total -ge "1")
 {
     $Stats = $BTM | Group-Object Name | Select-Object @{Name='Name'; Expression={if($_.Name){$_.Name}else{'N/A'}}},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Total)}} | Sort-Object Count -Descending
-    $Stats | Export-Excel -Path "$OUTPUT_FOLDER\Stats\Name.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Name" -CellStyleSB {
-    param($WorkSheet)
-    # BackgroundColor and FontColor for specific cells of TopRow
-    Set-Format -Address $WorkSheet.Cells["A1:C1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-    # HorizontalAlignment "Center" of columns A-C
-    $WorkSheet.Cells["A:C"].Style.HorizontalAlignment="Center"
+    if ($script:EnableExcel)
+    {
+        $Stats | Export-Excel -Path "$OUTPUT_FOLDER/Stats/Name.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Name" -CellStyleSB {
+        param($WorkSheet)
+        if ($script:UseExcelStyling)
+        {
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:C1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-C
+            $WorkSheet.Cells["A:C"].Style.HorizontalAlignment="Center"
+        }
+        }
+    }
+    else
+    {
+        $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/Name.csv" -NoTypeInformation -Encoding UTF8
     }
 }
 
@@ -489,12 +614,22 @@ $Total = ($BTM | Select-Object Name | Measure-Object).Count
 if ($Total -ge "1")
 {
     $Stats = $BTM | Group-Object Name,"Developer Name" | Select-Object @{Name='Name'; Expression={ $_.Values[0] }},@{Name='Developer Name'; Expression={ $_.Values[1] }},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Total)}} | Sort-Object Count -Descending
-    $Stats | Export-Excel -Path "$OUTPUT_FOLDER\Stats\Name-DeveloperName.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Name - Developer Name" -CellStyleSB {
-    param($WorkSheet)
-    # BackgroundColor and FontColor for specific cells of TopRow
-    Set-Format -Address $WorkSheet.Cells["A1:D1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-    # HorizontalAlignment "Center" of columns A-D
-    $WorkSheet.Cells["A:D"].Style.HorizontalAlignment="Center"
+    if ($script:EnableExcel)
+    {
+        $Stats | Export-Excel -Path "$OUTPUT_FOLDER/Stats/Name-DeveloperName.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Name - Developer Name" -CellStyleSB {
+        param($WorkSheet)
+        if ($script:UseExcelStyling)
+        {
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:D1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-D
+            $WorkSheet.Cells["A:D"].Style.HorizontalAlignment="Center"
+        }
+        }
+    }
+    else
+    {
+        $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/Name-DeveloperName.csv" -NoTypeInformation -Encoding UTF8
     }
 }
 
@@ -503,12 +638,22 @@ $Total = ($BTM | Select-Object Type | Measure-Object).Count
 if ($Total -ge "1")
 {
     $Stats = $BTM | Group-Object Type | Select-Object @{Name='Type'; Expression={if($_.Name){$_.Name}else{'N/A'}}},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Total)}} | Sort-Object Count -Descending
-    $Stats | Export-Excel -Path "$OUTPUT_FOLDER\Stats\Type.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Type" -CellStyleSB {
-    param($WorkSheet)
-    # BackgroundColor and FontColor for specific cells of TopRow
-    Set-Format -Address $WorkSheet.Cells["A1:C1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-    # HorizontalAlignment "Center" of columns A-C
-    $WorkSheet.Cells["A:C"].Style.HorizontalAlignment="Center"
+    if ($script:EnableExcel)
+    {
+        $Stats | Export-Excel -Path "$OUTPUT_FOLDER/Stats/Type.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Type" -CellStyleSB {
+        param($WorkSheet)
+        if ($script:UseExcelStyling)
+        {
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:C1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-C
+            $WorkSheet.Cells["A:C"].Style.HorizontalAlignment="Center"
+        }
+        }
+    }
+    else
+    {
+        $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/Type.csv" -NoTypeInformation -Encoding UTF8
     }
 }
 
@@ -552,21 +697,36 @@ Write-Host ""
 Stop-Transcript
 Start-Sleep 0.5
 
-# MessageBox UI
-$MessageBody = "Status: BTM Analysis completed."
-$MessageTitle = "BTM-Analyzer.ps1 (https://lethal-forensics.com/)"
-$ButtonType = "OK"
-$MessageIcon = "Information"
-$Result = [System.Windows.Forms.MessageBox]::Show($MessageBody, $MessageTitle, $ButtonType, $MessageIcon)
-
-if ($Result -eq "OK" ) 
+# Show completion message
+if ($script:OnWindows)
 {
-    # Reset Progress Preference
-    $Global:ProgressPreference = $OriginalProgressPreference
+    # Windows - Use MessageBox
+    Add-Type -AssemblyName System.Windows.Forms
+    $MessageBody = "Status: BTM Analysis completed."
+    $MessageTitle = "BTM-Analyzer.ps1 (https://lethal-forensics.com/)"
+    $ButtonType = "OK"
+    $MessageIcon = "Information"
+    $Result = [System.Windows.Forms.MessageBox]::Show($MessageBody, $MessageTitle, $ButtonType, $MessageIcon)
 
-    # Reset Windows Title
-    $Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
-    Exit
+    if ($Result -eq "OK" ) 
+    {
+        $Global:ProgressPreference = $OriginalProgressPreference
+        $Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
+        Exit
+    }
+}
+else
+{
+    # macOS/Linux - Console message
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Green
+    Write-Host "  BTM Analysis completed successfully!  " -ForegroundColor Green
+    Write-Host "========================================" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "Output directory: $OUTPUT_FOLDER" -ForegroundColor Cyan
+    Write-Host ""
+    
+    $Global:ProgressPreference = $OriginalProgressPreference
 }
 
 }
@@ -584,240 +744,3 @@ Footer
 
 #############################################################################################################################################################################################
 #############################################################################################################################################################################################
-
-# SIG # Begin signature block
-# MIIrywYJKoZIhvcNAQcCoIIrvDCCK7gCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
-# gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUOpZyU2AmLj6299THFqk4AN3P
-# Mv6ggiUEMIIFbzCCBFegAwIBAgIQSPyTtGBVlI02p8mKidaUFjANBgkqhkiG9w0B
-# AQwFADB7MQswCQYDVQQGEwJHQjEbMBkGA1UECAwSR3JlYXRlciBNYW5jaGVzdGVy
-# MRAwDgYDVQQHDAdTYWxmb3JkMRowGAYDVQQKDBFDb21vZG8gQ0EgTGltaXRlZDEh
-# MB8GA1UEAwwYQUFBIENlcnRpZmljYXRlIFNlcnZpY2VzMB4XDTIxMDUyNTAwMDAw
-# MFoXDTI4MTIzMTIzNTk1OVowVjELMAkGA1UEBhMCR0IxGDAWBgNVBAoTD1NlY3Rp
-# Z28gTGltaXRlZDEtMCsGA1UEAxMkU2VjdGlnbyBQdWJsaWMgQ29kZSBTaWduaW5n
-# IFJvb3QgUjQ2MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAjeeUEiIE
-# JHQu/xYjApKKtq42haxH1CORKz7cfeIxoFFvrISR41KKteKW3tCHYySJiv/vEpM7
-# fbu2ir29BX8nm2tl06UMabG8STma8W1uquSggyfamg0rUOlLW7O4ZDakfko9qXGr
-# YbNzszwLDO/bM1flvjQ345cbXf0fEj2CA3bm+z9m0pQxafptszSswXp43JJQ8mTH
-# qi0Eq8Nq6uAvp6fcbtfo/9ohq0C/ue4NnsbZnpnvxt4fqQx2sycgoda6/YDnAdLv
-# 64IplXCN/7sVz/7RDzaiLk8ykHRGa0c1E3cFM09jLrgt4b9lpwRrGNhx+swI8m2J
-# mRCxrds+LOSqGLDGBwF1Z95t6WNjHjZ/aYm+qkU+blpfj6Fby50whjDoA7NAxg0P
-# OM1nqFOI+rgwZfpvx+cdsYN0aT6sxGg7seZnM5q2COCABUhA7vaCZEao9XOwBpXy
-# bGWfv1VbHJxXGsd4RnxwqpQbghesh+m2yQ6BHEDWFhcp/FycGCvqRfXvvdVnTyhe
-# Be6QTHrnxvTQ/PrNPjJGEyA2igTqt6oHRpwNkzoJZplYXCmjuQymMDg80EY2NXyc
-# uu7D1fkKdvp+BRtAypI16dV60bV/AK6pkKrFfwGcELEW/MxuGNxvYv6mUKe4e7id
-# FT/+IAx1yCJaE5UZkADpGtXChvHjjuxf9OUCAwEAAaOCARIwggEOMB8GA1UdIwQY
-# MBaAFKARCiM+lvEH7OKvKe+CpX/QMKS0MB0GA1UdDgQWBBQy65Ka/zWWSC8oQEJw
-# IDaRXBeF5jAOBgNVHQ8BAf8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB/zATBgNVHSUE
-# DDAKBggrBgEFBQcDAzAbBgNVHSAEFDASMAYGBFUdIAAwCAYGZ4EMAQQBMEMGA1Ud
-# HwQ8MDowOKA2oDSGMmh0dHA6Ly9jcmwuY29tb2RvY2EuY29tL0FBQUNlcnRpZmlj
-# YXRlU2VydmljZXMuY3JsMDQGCCsGAQUFBwEBBCgwJjAkBggrBgEFBQcwAYYYaHR0
-# cDovL29jc3AuY29tb2RvY2EuY29tMA0GCSqGSIb3DQEBDAUAA4IBAQASv6Hvi3Sa
-# mES4aUa1qyQKDKSKZ7g6gb9Fin1SB6iNH04hhTmja14tIIa/ELiueTtTzbT72ES+
-# BtlcY2fUQBaHRIZyKtYyFfUSg8L54V0RQGf2QidyxSPiAjgaTCDi2wH3zUZPJqJ8
-# ZsBRNraJAlTH/Fj7bADu/pimLpWhDFMpH2/YGaZPnvesCepdgsaLr4CnvYFIUoQx
-# 2jLsFeSmTD1sOXPUC4U5IOCFGmjhp0g4qdE2JXfBjRkWxYhMZn0vY86Y6GnfrDyo
-# XZ3JHFuu2PMvdM+4fvbXg50RlmKarkUT2n/cR/vfw1Kf5gZV6Z2M8jpiUbzsJA8p
-# 1FiAhORFe1rYMIIGFDCCA/ygAwIBAgIQeiOu2lNplg+RyD5c9MfjPzANBgkqhkiG
-# 9w0BAQwFADBXMQswCQYDVQQGEwJHQjEYMBYGA1UEChMPU2VjdGlnbyBMaW1pdGVk
-# MS4wLAYDVQQDEyVTZWN0aWdvIFB1YmxpYyBUaW1lIFN0YW1waW5nIFJvb3QgUjQ2
-# MB4XDTIxMDMyMjAwMDAwMFoXDTM2MDMyMTIzNTk1OVowVTELMAkGA1UEBhMCR0Ix
-# GDAWBgNVBAoTD1NlY3RpZ28gTGltaXRlZDEsMCoGA1UEAxMjU2VjdGlnbyBQdWJs
-# aWMgVGltZSBTdGFtcGluZyBDQSBSMzYwggGiMA0GCSqGSIb3DQEBAQUAA4IBjwAw
-# ggGKAoIBgQDNmNhDQatugivs9jN+JjTkiYzT7yISgFQ+7yavjA6Bg+OiIjPm/N/t
-# 3nC7wYUrUlY3mFyI32t2o6Ft3EtxJXCc5MmZQZ8AxCbh5c6WzeJDB9qkQVa46xiY
-# Epc81KnBkAWgsaXnLURoYZzksHIzzCNxtIXnb9njZholGw9djnjkTdAA83abEOHQ
-# 4ujOGIaBhPXG2NdV8TNgFWZ9BojlAvflxNMCOwkCnzlH4oCw5+4v1nssWeN1y4+R
-# laOywwRMUi54fr2vFsU5QPrgb6tSjvEUh1EC4M29YGy/SIYM8ZpHadmVjbi3Pl8h
-# JiTWw9jiCKv31pcAaeijS9fc6R7DgyyLIGflmdQMwrNRxCulVq8ZpysiSYNi79tw
-# 5RHWZUEhnRfs/hsp/fwkXsynu1jcsUX+HuG8FLa2BNheUPtOcgw+vHJcJ8HnJCrc
-# UWhdFczf8O+pDiyGhVYX+bDDP3GhGS7TmKmGnbZ9N+MpEhWmbiAVPbgkqykSkzyY
-# Vr15OApZYK8CAwEAAaOCAVwwggFYMB8GA1UdIwQYMBaAFPZ3at0//QET/xahbIIC
-# L9AKPRQlMB0GA1UdDgQWBBRfWO1MMXqiYUKNUoC6s2GXGaIymzAOBgNVHQ8BAf8E
-# BAMCAYYwEgYDVR0TAQH/BAgwBgEB/wIBADATBgNVHSUEDDAKBggrBgEFBQcDCDAR
-# BgNVHSAECjAIMAYGBFUdIAAwTAYDVR0fBEUwQzBBoD+gPYY7aHR0cDovL2NybC5z
-# ZWN0aWdvLmNvbS9TZWN0aWdvUHVibGljVGltZVN0YW1waW5nUm9vdFI0Ni5jcmww
-# fAYIKwYBBQUHAQEEcDBuMEcGCCsGAQUFBzAChjtodHRwOi8vY3J0LnNlY3RpZ28u
-# Y29tL1NlY3RpZ29QdWJsaWNUaW1lU3RhbXBpbmdSb290UjQ2LnA3YzAjBggrBgEF
-# BQcwAYYXaHR0cDovL29jc3Auc2VjdGlnby5jb20wDQYJKoZIhvcNAQEMBQADggIB
-# ABLXeyCtDjVYDJ6BHSVY/UwtZ3Svx2ImIfZVVGnGoUaGdltoX4hDskBMZx5NY5L6
-# SCcwDMZhHOmbyMhyOVJDwm1yrKYqGDHWzpwVkFJ+996jKKAXyIIaUf5JVKjccev3
-# w16mNIUlNTkpJEor7edVJZiRJVCAmWAaHcw9zP0hY3gj+fWp8MbOocI9Zn78xvm9
-# XKGBp6rEs9sEiq/pwzvg2/KjXE2yWUQIkms6+yslCRqNXPjEnBnxuUB1fm6bPAV+
-# Tsr/Qrd+mOCJemo06ldon4pJFbQd0TQVIMLv5koklInHvyaf6vATJP4DfPtKzSBP
-# kKlOtyaFTAjD2Nu+di5hErEVVaMqSVbfPzd6kNXOhYm23EWm6N2s2ZHCHVhlUgHa
-# C4ACMRCgXjYfQEDtYEK54dUwPJXV7icz0rgCzs9VI29DwsjVZFpO4ZIVR33LwXyP
-# DbYFkLqYmgHjR3tKVkhh9qKV2WCmBuC27pIOx6TYvyqiYbntinmpOqh/QPAnhDge
-# xKG9GX/n1PggkGi9HCapZp8fRwg8RftwS21Ln61euBG0yONM6noD2XQPrFwpm3Gc
-# uqJMf0o8LLrFkSLRQNwxPDDkWXhW+gZswbaiie5fd/W2ygcto78XCSPfFWveUOSZ
-# 5SqK95tBO8aTHmEa4lpJVD7HrTEn9jb1EGvxOb1cnn0CMIIGGjCCBAKgAwIBAgIQ
-# Yh1tDFIBnjuQeRUgiSEcCjANBgkqhkiG9w0BAQwFADBWMQswCQYDVQQGEwJHQjEY
-# MBYGA1UEChMPU2VjdGlnbyBMaW1pdGVkMS0wKwYDVQQDEyRTZWN0aWdvIFB1Ymxp
-# YyBDb2RlIFNpZ25pbmcgUm9vdCBSNDYwHhcNMjEwMzIyMDAwMDAwWhcNMzYwMzIx
-# MjM1OTU5WjBUMQswCQYDVQQGEwJHQjEYMBYGA1UEChMPU2VjdGlnbyBMaW1pdGVk
-# MSswKQYDVQQDEyJTZWN0aWdvIFB1YmxpYyBDb2RlIFNpZ25pbmcgQ0EgUjM2MIIB
-# ojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAmyudU/o1P45gBkNqwM/1f/bI
-# U1MYyM7TbH78WAeVF3llMwsRHgBGRmxDeEDIArCS2VCoVk4Y/8j6stIkmYV5Gej4
-# NgNjVQ4BYoDjGMwdjioXan1hlaGFt4Wk9vT0k2oWJMJjL9G//N523hAm4jF4UjrW
-# 2pvv9+hdPX8tbbAfI3v0VdJiJPFy/7XwiunD7mBxNtecM6ytIdUlh08T2z7mJEXZ
-# D9OWcJkZk5wDuf2q52PN43jc4T9OkoXZ0arWZVeffvMr/iiIROSCzKoDmWABDRzV
-# /UiQ5vqsaeFaqQdzFf4ed8peNWh1OaZXnYvZQgWx/SXiJDRSAolRzZEZquE6cbcH
-# 747FHncs/Kzcn0Ccv2jrOW+LPmnOyB+tAfiWu01TPhCr9VrkxsHC5qFNxaThTG5j
-# 4/Kc+ODD2dX/fmBECELcvzUHf9shoFvrn35XGf2RPaNTO2uSZ6n9otv7jElspkfK
-# 9qEATHZcodp+R4q2OIypxR//YEb3fkDn3UayWW9bAgMBAAGjggFkMIIBYDAfBgNV
-# HSMEGDAWgBQy65Ka/zWWSC8oQEJwIDaRXBeF5jAdBgNVHQ4EFgQUDyrLIIcouOxv
-# SK4rVKYpqhekzQwwDgYDVR0PAQH/BAQDAgGGMBIGA1UdEwEB/wQIMAYBAf8CAQAw
-# EwYDVR0lBAwwCgYIKwYBBQUHAwMwGwYDVR0gBBQwEjAGBgRVHSAAMAgGBmeBDAEE
-# ATBLBgNVHR8ERDBCMECgPqA8hjpodHRwOi8vY3JsLnNlY3RpZ28uY29tL1NlY3Rp
-# Z29QdWJsaWNDb2RlU2lnbmluZ1Jvb3RSNDYuY3JsMHsGCCsGAQUFBwEBBG8wbTBG
-# BggrBgEFBQcwAoY6aHR0cDovL2NydC5zZWN0aWdvLmNvbS9TZWN0aWdvUHVibGlj
-# Q29kZVNpZ25pbmdSb290UjQ2LnA3YzAjBggrBgEFBQcwAYYXaHR0cDovL29jc3Au
-# c2VjdGlnby5jb20wDQYJKoZIhvcNAQEMBQADggIBAAb/guF3YzZue6EVIJsT/wT+
-# mHVEYcNWlXHRkT+FoetAQLHI1uBy/YXKZDk8+Y1LoNqHrp22AKMGxQtgCivnDHFy
-# AQ9GXTmlk7MjcgQbDCx6mn7yIawsppWkvfPkKaAQsiqaT9DnMWBHVNIabGqgQSGT
-# rQWo43MOfsPynhbz2Hyxf5XWKZpRvr3dMapandPfYgoZ8iDL2OR3sYztgJrbG6VZ
-# 9DoTXFm1g0Rf97Aaen1l4c+w3DC+IkwFkvjFV3jS49ZSc4lShKK6BrPTJYs4NG1D
-# GzmpToTnwoqZ8fAmi2XlZnuchC4NPSZaPATHvNIzt+z1PHo35D/f7j2pO1S8BCys
-# QDHCbM5Mnomnq5aYcKCsdbh0czchOm8bkinLrYrKpii+Tk7pwL7TjRKLXkomm5D1
-# Umds++pip8wH2cQpf93at3VDcOK4N7EwoIJB0kak6pSzEu4I64U6gZs7tS/dGNSl
-# jf2OSSnRr7KWzq03zl8l75jy+hOds9TWSenLbjBQUGR96cFr6lEUfAIEHVC1L68Y
-# 1GGxx4/eRI82ut83axHMViw1+sVpbPxg51Tbnio1lB93079WPFnYaOvfGAA0e0zc
-# fF/M9gXr+korwQTh2Prqooq2bYNMvUoUKD85gnJ+t0smrWrb8dee2CvYZXD5laGt
-# aAxOfy/VKNmwuWuAh9kcMIIGYjCCBMqgAwIBAgIRAKQpO24e3denNAiHrXpOtyQw
-# DQYJKoZIhvcNAQEMBQAwVTELMAkGA1UEBhMCR0IxGDAWBgNVBAoTD1NlY3RpZ28g
-# TGltaXRlZDEsMCoGA1UEAxMjU2VjdGlnbyBQdWJsaWMgVGltZSBTdGFtcGluZyBD
-# QSBSMzYwHhcNMjUwMzI3MDAwMDAwWhcNMzYwMzIxMjM1OTU5WjByMQswCQYDVQQG
-# EwJHQjEXMBUGA1UECBMOV2VzdCBZb3Jrc2hpcmUxGDAWBgNVBAoTD1NlY3RpZ28g
-# TGltaXRlZDEwMC4GA1UEAxMnU2VjdGlnbyBQdWJsaWMgVGltZSBTdGFtcGluZyBT
-# aWduZXIgUjM2MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA04SV9G6k
-# U3jyPRBLeBIHPNyUgVNnYayfsGOyYEXrn3+SkDYTLs1crcw/ol2swE1TzB2aR/5J
-# IjKNf75QBha2Ddj+4NEPKDxHEd4dEn7RTWMcTIfm492TW22I8LfH+A7Ehz0/safc
-# 6BbsNBzjHTt7FngNfhfJoYOrkugSaT8F0IzUh6VUwoHdYDpiln9dh0n0m545d5A5
-# tJD92iFAIbKHQWGbCQNYplqpAFasHBn77OqW37P9BhOASdmjp3IijYiFdcA0WQIe
-# 60vzvrk0HG+iVcwVZjz+t5OcXGTcxqOAzk1frDNZ1aw8nFhGEvG0ktJQknnJZE3D
-# 40GofV7O8WzgaAnZmoUn4PCpvH36vD4XaAF2CjiPsJWiY/j2xLsJuqx3JtuI4akH
-# 0MmGzlBUylhXvdNVXcjAuIEcEQKtOBR9lU4wXQpISrbOT8ux+96GzBq8TdbhoFcm
-# YaOBZKlwPP7pOp5Mzx/UMhyBA93PQhiCdPfIVOCINsUY4U23p4KJ3F1HqP3H6Slw
-# 3lHACnLilGETXRg5X/Fp8G8qlG5Y+M49ZEGUp2bneRLZoyHTyynHvFISpefhBCV0
-# KdRZHPcuSL5OAGWnBjAlRtHvsMBrI3AAA0Tu1oGvPa/4yeeiAyu+9y3SLC98gDVb
-# ySnXnkujjhIh+oaatsk/oyf5R2vcxHahajMCAwEAAaOCAY4wggGKMB8GA1UdIwQY
-# MBaAFF9Y7UwxeqJhQo1SgLqzYZcZojKbMB0GA1UdDgQWBBSIYYyhKjdkgShgoZsx
-# 0Iz9LALOTzAOBgNVHQ8BAf8EBAMCBsAwDAYDVR0TAQH/BAIwADAWBgNVHSUBAf8E
-# DDAKBggrBgEFBQcDCDBKBgNVHSAEQzBBMDUGDCsGAQQBsjEBAgEDCDAlMCMGCCsG
-# AQUFBwIBFhdodHRwczovL3NlY3RpZ28uY29tL0NQUzAIBgZngQwBBAIwSgYDVR0f
-# BEMwQTA/oD2gO4Y5aHR0cDovL2NybC5zZWN0aWdvLmNvbS9TZWN0aWdvUHVibGlj
-# VGltZVN0YW1waW5nQ0FSMzYuY3JsMHoGCCsGAQUFBwEBBG4wbDBFBggrBgEFBQcw
-# AoY5aHR0cDovL2NydC5zZWN0aWdvLmNvbS9TZWN0aWdvUHVibGljVGltZVN0YW1w
-# aW5nQ0FSMzYuY3J0MCMGCCsGAQUFBzABhhdodHRwOi8vb2NzcC5zZWN0aWdvLmNv
-# bTANBgkqhkiG9w0BAQwFAAOCAYEAAoE+pIZyUSH5ZakuPVKK4eWbzEsTRJOEjbIu
-# 6r7vmzXXLpJx4FyGmcqnFZoa1dzx3JrUCrdG5b//LfAxOGy9Ph9JtrYChJaVHrus
-# Dh9NgYwiGDOhyyJ2zRy3+kdqhwtUlLCdNjFjakTSE+hkC9F5ty1uxOoQ2ZkfI5WM
-# 4WXA3ZHcNHB4V42zi7Jk3ktEnkSdViVxM6rduXW0jmmiu71ZpBFZDh7Kdens+PQX
-# PgMqvzodgQJEkxaION5XRCoBxAwWwiMm2thPDuZTzWp/gUFzi7izCmEt4pE3Kf0M
-# Ot3ccgwn4Kl2FIcQaV55nkjv1gODcHcD9+ZVjYZoyKTVWb4VqMQy/j8Q3aaYd/jO
-# Q66Fhk3NWbg2tYl5jhQCuIsE55Vg4N0DUbEWvXJxtxQQaVR5xzhEI+BjJKzh3TQ0
-# 26JxHhr2fuJ0mV68AluFr9qshgwS5SpN5FFtaSEnAwqZv3IS+mlG50rK7W3qXbWw
-# i4hmpylUfygtYLEdLQukNEX1jiOKMIIGazCCBNOgAwIBAgIRAIxBnpO/K86siAYo
-# O3YZvTwwDQYJKoZIhvcNAQEMBQAwVDELMAkGA1UEBhMCR0IxGDAWBgNVBAoTD1Nl
-# Y3RpZ28gTGltaXRlZDErMCkGA1UEAxMiU2VjdGlnbyBQdWJsaWMgQ29kZSBTaWdu
-# aW5nIENBIFIzNjAeFw0yNDExMTQwMDAwMDBaFw0yNzExMTQyMzU5NTlaMFcxCzAJ
-# BgNVBAYTAkRFMRYwFAYDVQQIDA1OaWVkZXJzYWNoc2VuMRcwFQYDVQQKDA5NYXJ0
-# aW4gV2lsbGluZzEXMBUGA1UEAwwOTWFydGluIFdpbGxpbmcwggIiMA0GCSqGSIb3
-# DQEBAQUAA4ICDwAwggIKAoICAQDRn27mnIzB6dsJFLMexQQNRd8aMv73DTla68G6
-# Q8u+V2TY1JQ/Z4j2oCI9ATW3K3P7NAPdlE0QmtdjC0F/74jsfil/i8LwxuyT034w
-# abViZKUcodmKsEFhM9am8W5kUgLuC5FIK4wNOq5TfzYdHTyJu1eR2XuSDoMp0wg4
-# 5mOuFNBbYB8DVBtHxobvWq4eCs3lUxX07wR3Qr2Utb92w8eU2vKr2Ss9xIh/YvM4
-# UxgBpO1I6O+W2tAB5mmynIgoCfX7mu6iD3A+AhpQ9Gv209G83y8FPrFJIWU77TTe
-# hErbPjZ074xXwrlEkhnGUCk1w+KiNtZHaSn0X+vnhqJ7otBxQZQAESlhWXpDKCun
-# nnVnVgwvVWtccAhxZO95eif6Vss/UhCaBZ26szlneGtFeTClI4+k3mqfWuodtXjH
-# c8ohAclWp7XVywliwhCFEsAcFkpkCyivey0sqEfrwiMnRy1elH1S37XcQaav5+bt
-# 4KxtIXuOVEx3vM9MHdlraW0y1on5E8i4tagdI45TH0LU080ubc2MKqq6ZXtplTu1
-# wdF2Cgy3hfSSLkJscRWApvpvOO6Vtc4jTG/AO6iqN5M6Swd+g40XtsxBD/gSk9kM
-# qkgJ1pD1Gp5gkHnP1veut+YgJ9xWcRDJI7vcis9qsXwtVybeOCh56rTQvC/Tf6BJ
-# tiieEQIDAQABo4IBszCCAa8wHwYDVR0jBBgwFoAUDyrLIIcouOxvSK4rVKYpqhek
-# zQwwHQYDVR0OBBYEFIxyZAmEHl7uAfEwbB4nzI8MCCLbMA4GA1UdDwEB/wQEAwIH
-# gDAMBgNVHRMBAf8EAjAAMBMGA1UdJQQMMAoGCCsGAQUFBwMDMEoGA1UdIARDMEEw
-# NQYMKwYBBAGyMQECAQMCMCUwIwYIKwYBBQUHAgEWF2h0dHBzOi8vc2VjdGlnby5j
-# b20vQ1BTMAgGBmeBDAEEATBJBgNVHR8EQjBAMD6gPKA6hjhodHRwOi8vY3JsLnNl
-# Y3RpZ28uY29tL1NlY3RpZ29QdWJsaWNDb2RlU2lnbmluZ0NBUjM2LmNybDB5Bggr
-# BgEFBQcBAQRtMGswRAYIKwYBBQUHMAKGOGh0dHA6Ly9jcnQuc2VjdGlnby5jb20v
-# U2VjdGlnb1B1YmxpY0NvZGVTaWduaW5nQ0FSMzYuY3J0MCMGCCsGAQUFBzABhhdo
-# dHRwOi8vb2NzcC5zZWN0aWdvLmNvbTAoBgNVHREEITAfgR1td2lsbGluZ0BsZXRo
-# YWwtZm9yZW5zaWNzLmNvbTANBgkqhkiG9w0BAQwFAAOCAYEAZ0dBMMwluWGb+MD1
-# rGWaPtaXrNZnlZqOZxgbdrMLBKAQr0QGcILCVIZ4SZYaevT5yMR6jFGSAjgaFtnk
-# 8ZpbtGwig/ed/C/D1Ne8SZyffdtALns/5CHxMnU8ks7ut7dsR6zFD4/bmljuoUoi
-# 55W6/XU/1pr+tqRaZGJvjSKJQCN9MhFAvXSpPPqRsj27ze1+KYIBF1/L0BW0HS0d
-# 9ZhGSUoEwqMDLpQf2eqJFyyyzWt21VVhLF6mgZ1dE5tCLZY7ERzx6/h5N7F0w361
-# oigizMbCMdST29XOc5mB8q6Cye7OmEfM2jByRWa+cd4RycsN2p2wHRukpq48iX+t
-# PVKmHwNKf+upuKPDQAeV4J7gUCtevIsOtoyiC2+amimu81o424Dl+NsAyCLz0SXv
-# NAhVvtU73H61gtoPa/SWouem2S+bzp7oGvGPop/9mh4CXki6LVeDH3hDM8hZsJg/
-# EToIWiDozTc2yWqwV4Ozyd4x5Ix8lckXMgWuyWcxmLK1RmKpMIIGgjCCBGqgAwIB
-# AgIQNsKwvXwbOuejs902y8l1aDANBgkqhkiG9w0BAQwFADCBiDELMAkGA1UEBhMC
-# VVMxEzARBgNVBAgTCk5ldyBKZXJzZXkxFDASBgNVBAcTC0plcnNleSBDaXR5MR4w
-# HAYDVQQKExVUaGUgVVNFUlRSVVNUIE5ldHdvcmsxLjAsBgNVBAMTJVVTRVJUcnVz
-# dCBSU0EgQ2VydGlmaWNhdGlvbiBBdXRob3JpdHkwHhcNMjEwMzIyMDAwMDAwWhcN
-# MzgwMTE4MjM1OTU5WjBXMQswCQYDVQQGEwJHQjEYMBYGA1UEChMPU2VjdGlnbyBM
-# aW1pdGVkMS4wLAYDVQQDEyVTZWN0aWdvIFB1YmxpYyBUaW1lIFN0YW1waW5nIFJv
-# b3QgUjQ2MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAiJ3YuUVnnR3d
-# 6LkmgZpUVMB8SQWbzFoVD9mUEES0QUCBdxSZqdTkdizICFNeINCSJS+lV1ipnW5i
-# hkQyC0cRLWXUJzodqpnMRs46npiJPHrfLBOifjfhpdXJ2aHHsPHggGsCi7uE0awq
-# KggE/LkYw3sqaBia67h/3awoqNvGqiFRJ+OTWYmUCO2GAXsePHi+/JUNAax3kpqs
-# tbl3vcTdOGhtKShvZIvjwulRH87rbukNyHGWX5tNK/WABKf+Gnoi4cmisS7oSimg
-# HUI0Wn/4elNd40BFdSZ1EwpuddZ+Wr7+Dfo0lcHflm/FDDrOJ3rWqauUP8hsokDo
-# I7D/yUVI9DAE/WK3Jl3C4LKwIpn1mNzMyptRwsXKrop06m7NUNHdlTDEMovXAIDG
-# AvYynPt5lutv8lZeI5w3MOlCybAZDpK3Dy1MKo+6aEtE9vtiTMzz/o2dYfdP0KWZ
-# wZIXbYsTIlg1YIetCpi5s14qiXOpRsKqFKqav9R1R5vj3NgevsAsvxsAnI8Oa5s2
-# oy25qhsoBIGo/zi6GpxFj+mOdh35Xn91y72J4RGOJEoqzEIbW3q0b2iPuWLA911c
-# RxgY5SJYubvjay3nSMbBPPFsyl6mY4/WYucmyS9lo3l7jk27MAe145GWxK4O3m3g
-# EFEIkv7kRmefDR7Oe2T1HxAnICQvr9sCAwEAAaOCARYwggESMB8GA1UdIwQYMBaA
-# FFN5v1qqK0rPVIDh2JvAnfKyA2bLMB0GA1UdDgQWBBT2d2rdP/0BE/8WoWyCAi/Q
-# Cj0UJTAOBgNVHQ8BAf8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB/zATBgNVHSUEDDAK
-# BggrBgEFBQcDCDARBgNVHSAECjAIMAYGBFUdIAAwUAYDVR0fBEkwRzBFoEOgQYY/
-# aHR0cDovL2NybC51c2VydHJ1c3QuY29tL1VTRVJUcnVzdFJTQUNlcnRpZmljYXRp
-# b25BdXRob3JpdHkuY3JsMDUGCCsGAQUFBwEBBCkwJzAlBggrBgEFBQcwAYYZaHR0
-# cDovL29jc3AudXNlcnRydXN0LmNvbTANBgkqhkiG9w0BAQwFAAOCAgEADr5lQe1o
-# RLjlocXUEYfktzsljOt+2sgXke3Y8UPEooU5y39rAARaAdAxUeiX1ktLJ3+lgxto
-# LQhn5cFb3GF2SSZRX8ptQ6IvuD3wz/LNHKpQ5nX8hjsDLRhsyeIiJsms9yAWnvdY
-# OdEMq1W61KE9JlBkB20XBee6JaXx4UBErc+YuoSb1SxVf7nkNtUjPfcxuFtrQdRM
-# Ri/fInV/AobE8Gw/8yBMQKKaHt5eia8ybT8Y/Ffa6HAJyz9gvEOcF1VWXG8OMeM7
-# Vy7Bs6mSIkYeYtddU1ux1dQLbEGur18ut97wgGwDiGinCwKPyFO7ApcmVJOtlw9F
-# VJxw/mL1TbyBns4zOgkaXFnnfzg4qbSvnrwyj1NiurMp4pmAWjR+Pb/SIduPnmFz
-# bSN/G8reZCL4fvGlvPFk4Uab/JVCSmj59+/mB2Gn6G/UYOy8k60mKcmaAZsEVkhO
-# Fuoj4we8CYyaR9vd9PGZKSinaZIkvVjbH/3nlLb0a7SBIkiRzfPfS9T+JesylbHa
-# 1LtRV9U/7m0q7Ma2CQ/t392ioOssXW7oKLdOmMBl14suVFBmbzrt5V5cQPnwtd3U
-# OTpS9oCG+ZZheiIvPgkDmA8FzPsnfXW5qHELB43ET7HHFHeRPRYrMBKjkb8/IN7P
-# o0d0hQoF4TeMM+zYAJzoKQnVKOLg8pZVPT8xggYxMIIGLQIBATBpMFQxCzAJBgNV
-# BAYTAkdCMRgwFgYDVQQKEw9TZWN0aWdvIExpbWl0ZWQxKzApBgNVBAMTIlNlY3Rp
-# Z28gUHVibGljIENvZGUgU2lnbmluZyBDQSBSMzYCEQCMQZ6TvyvOrIgGKDt2Gb08
-# MAkGBSsOAwIaBQCgeDAYBgorBgEEAYI3AgEMMQowCKACgAChAoAAMBkGCSqGSIb3
-# DQEJAzEMBgorBgEEAYI3AgEEMBwGCisGAQQBgjcCAQsxDjAMBgorBgEEAYI3AgEV
-# MCMGCSqGSIb3DQEJBDEWBBRj3baSlfpetKAlhOmmn5D0lLt+3jANBgkqhkiG9w0B
-# AQEFAASCAgAIMzJbj6ZweU6PRfKHCady2ptfDQvVOl0ZjAacisRBR+hetgcMX40u
-# C4PJBmUei/VXI4w8BbDd6CE0zqlVV3kJfoN8xbyEbK9aAi3q6+yhEISLUWoFk2s9
-# QrjjMP6+jpSMpid0QRXmAlKRTms48bGjzdBsWy4d4IjQS22tFXr2pjaqCPp0F+DN
-# 8tRPU2tWwmmINDcg9A2MxVrioKUZ2g/YSdIXRkuFh08iVLvySDkcaDyqHPgoPL2G
-# 1c/63VYhFnyVx6OviBxCK+Q4G2iZGacBX3UScZSwiL0WsW/A1hvTg21gFlvc1qTP
-# VW/CmKf4tTPKKH23LSG1RUGY+AWxFkvYBoldkZ1LJl5Z9njmR362inisNjCbk1bY
-# XaEvpuEQA1sOllpVq0tEC1c7BhKZnotX8+YN722RX+rS6iFwhY+2McQKrZGgBjOh
-# lN5WR5yG8faBvM/qp4QSLzJI6OcT0/zjQX335uizEvgd0suBmU0gYd7CJxh0fJsf
-# Iac2uTgQkNNwnoPaqFw7j5Va2960BVtpvO5C+/mF31kEgKMESkHC9LRaSP1/L1+D
-# TdfL3/IjupdLWkpNPtzZS08lrKjbEskWYC2uXO+swjnENIyonpSDI4S5U4Tgq2xg
-# Ah0EBy1o3Q1MROgZmNw/astxosEwnHud6wTcSCy24g/8Rk6Py9WCsaGCAyMwggMf
-# BgkqhkiG9w0BCQYxggMQMIIDDAIBATBqMFUxCzAJBgNVBAYTAkdCMRgwFgYDVQQK
-# Ew9TZWN0aWdvIExpbWl0ZWQxLDAqBgNVBAMTI1NlY3RpZ28gUHVibGljIFRpbWUg
-# U3RhbXBpbmcgQ0EgUjM2AhEApCk7bh7d16c0CIetek63JDANBglghkgBZQMEAgIF
-# AKB5MBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkFMQ8XDTI1
-# MTEyMDA2NTgzNFowPwYJKoZIhvcNAQkEMTIEMIrf3XLNVAUG2kct9US1UXLohH7R
-# UPhIrZijiPcCpGkP8uNbja9ZOp24j9Ivg0+RvDANBgkqhkiG9w0BAQEFAASCAgDE
-# V2TkyhF5OkB4N0i8ZW8okqH5nTCVszwOYhpAjm9LYAQ5jHnTlYvMFsvVF4r97txT
-# MtROjmlQ3+Y2/vq5HnmKcaKLuCaH6klz12mVEe8dZjsjBv9MduGNwov3g6LYnxWS
-# /92CVjt7HHraon+DLRWsc/j0IVWVSI9GzxKF4Vjd4OtA+1aYkL/kWbYr738Fxbpr
-# x1cwLR9esBTsLad5eiYmwBHz3Ok4HGUBWi7sF/Q4HuVneNZiQtWLRLpa0GOpaVK6
-# j+VFqe8fNal/X7f8T7+NCyTMlCFh48bR10vDAZzOnmOskk7Vq6g5YzFQVZFlhqRp
-# vRViVrOcGwurWy0LX7y8JtZAaDgYBfLOzyfN3BFZt1rWP0W1x8UNrUWtSl7+wqrv
-# +a42s8MaMVo2Rq6pB4TYiuo4KZYERIcvn3bladIThdGZKAnGBX/PvhhRAcZO0eB0
-# jNIJHIE4JrsFO+797wLXdCZv5tRtdStJy53k3/SCgkUhbgLidEGCtSe1pCydAS1V
-# 6vmosTbdICamH63pQv3cv4q8uO/HybUz0nxVScNI63eTl5mJDVs4DWMh7FLlTE4L
-# ae/GAHKR/kWAOz+Vj0OBzRMg6o5D+KGgArHcSDBg7eeixHdmbiJEmOe5KdKBgFUv
-# A6MLTQx9Ji32lMl6PDJ1DxVQ6jH/lq9SixTwZR+8YQ==
-# SIG # End signature block
