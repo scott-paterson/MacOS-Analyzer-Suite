@@ -28,17 +28,24 @@ XLSX output is **disabled by default**.
 - If you want **CSV-only** (recommended): do nothing.
 - If you want **XLSX output** (optional): install ImportExcel and run with `-NoExcel:$false`.
 
+`KnockKnock-Analyzer.ps1` and `VirusTotal-Analyzer.ps1` are the exception: they **require** ImportExcel, because their main reports are XLSX. Column auto-sizing on macOS also needs `brew install mono-libgdiplus`; without it the reports are still written, just with default column widths.
+
 ### 3. System Tools
 
 Most scripts require SQLite (built-in on macOS) and optionally jq and xsv:
 
 ```bash
-# Install jq (JSON processor)
+# Install jq (JSON processor) - required by KnockKnock-Analyzer
 brew install jq
 
 # Install xsv (CSV toolkit)
 brew install xsv
+
+# VirusTotal lookups (VirusTotal-Analyzer, and the optional lookup step in KnockKnock/XProtect)
+brew install virustotal-cli yq
 ```
+
+For VirusTotal lookups, put your API key in `Config.json` under `VirusTotal.APIKey`.
 
 ## Script Compatibility
 
@@ -50,6 +57,8 @@ brew install xsv
 | BTM-Analyzer.ps1 | ✅ Full | Works natively |
 | Timeline-Analyzer.ps1 | ✅ Full | Works natively |
 | Storyline-Analyzer.ps1 | ✅ Full | Works natively |
+| KnockKnock-Analyzer.ps1 | ✅ Full | Requires ImportExcel and jq |
+| VirusTotal-Analyzer.ps1 | ✅ Full | Requires ImportExcel, `vt`, `yq`, and an API key |
 | DSStore-Analyzer.ps1 | ⚠️ Partial | Requires DSStoreParser (see below) |
 | FSEvents-Analyzer.ps1 | ⚠️ Partial | Python parser works; Rust parser is Windows-only |
 
@@ -93,8 +102,32 @@ pwsh ./Quarantine-Analyzer.ps1 -Path "$HOME/Library/Preferences/com.apple.Launch
 Analyzes the XProtect Behavioral Service database.
 
 ```bash
-# Requires sudo for live system
-sudo pwsh ./XProtect-Analyzer.ps1 -Path "/private/var/protected/xprotect/XPdb"
+# Requires sudo for live system (macOS 13+)
+sudo pwsh ./XProtect-Analyzer.ps1 -Path "/private/var/protected/xprotect/db/XPdb"
+
+# Skip the VirusTotal prompt at the end
+sudo pwsh ./XProtect-Analyzer.ps1 -Path "/private/var/protected/xprotect/db/XPdb" -skipVT
+```
+
+The `-wal` and `-shm` files next to `XPdb` are copied too, because recent events can still be in the write-ahead log.
+
+### KnockKnock-Analyzer
+
+Analyzes [KnockKnock](https://objective-see.org/products/knockknock.html) results (`KnockKnock_Results_yyyy-MM-dd.json`), including the verbose report format.
+
+```bash
+pwsh ./KnockKnock-Analyzer.ps1 -Path ~/Desktop/KnockKnock_Results_2026-11-24.json
+
+# Skip the VirusTotal prompt at the end
+pwsh ./KnockKnock-Analyzer.ps1 -Path ~/Desktop/KnockKnock_Results_2026-11-24.json -skipVT
+```
+
+### VirusTotal-Analyzer
+
+Bulk hash lookup against VirusTotal from a `.txt` or `.log` file with one MD5, SHA1, or SHA256 per line. KnockKnock-Analyzer and XProtect-Analyzer call it for you if you answer "Yes" at the end.
+
+```bash
+pwsh ./VirusTotal-Analyzer.ps1 -Path ~/Desktop/KnockKnock-Analyzer/KnockKnock/MD5.txt
 ```
 
 ### BTM-Analyzer

@@ -1,10 +1,10 @@
-# XProtect-Analyzer v0.4
+# XProtect-Analyzer v0.2
 #
 # @author:    Martin Willing
-# @copyright: Copyright (c) 2025 Martin Willing. All rights reserved. Licensed under the MIT license.
+# @copyright: Copyright (c) 2026 Martin Willing. All rights reserved. Licensed under the MIT license.
 # @contact:   Any feedback or suggestions are always welcome and much appreciated - mwilling@lethal-forensics.com
 # @url:       https://lethal-forensics.com/
-# @date:      2025-11-20
+# @date:      2026-03-16
 #
 #
 # ██╗     ███████╗████████╗██╗  ██╗ █████╗ ██╗      ███████╗ ██████╗ ██████╗ ███████╗███╗   ██╗███████╗██╗ ██████╗███████╗
@@ -27,25 +27,20 @@
 #
 # Changelog:
 # Version 0.1
-# Release Date: 2024-06-22
+# Release Date: 2025-11-10
 # Initial Release
 #
 # Version 0.2
-# Release Date: 2024-06-29
-# Fixed: Minor Bug Fixes and Improvements
+# Release Date: 2025-11-27
+# Added: VirusTotal Lookup
 #
-# Version 0.3
-# Release Date: 2024-11-20
-# Fixed: Minor Bug Fixes and Improvements
-#
-# Version 0.4
-# Release Date: 2025-12-11
-# Added: Cross-platform support for macOS and Windows
+# Fork (scott-paterson/MacOS-Analyzer-Suite)
+# Added: Native macOS support
 #
 #
-# Tested on Windows 10 Pro (x64) Version 22H2 (10.0.19045.5011) and target PowerShell version 5.1 (5.1.19041.5007)
-# Tested on Windows 10 Pro (x64) Version 22H2 (10.0.19045.5011) and PowerShell 7.4.6
-# Tested on macOS with PowerShell 7.x
+# Tested on Windows 10 Pro (x64) Version 22H2 (10.0.19045.6456) and PowerShell 5.1 (5.1.19041.6456)
+# Tested on Windows 10 Pro (x64) Version 22H2 (10.0.19045.6456) and PowerShell 7.5.5
+# Tested on macOS with PowerShell 7.7
 #
 #
 #############################################################################################################################################################################################
@@ -53,7 +48,7 @@
 
 <#
 .SYNOPSIS
-  XProtect-Analyzer v0.4 - Automated Processing of XProtect Behavioral Service Database for DFIR
+  XProtect-Analyzer v0.2 - Automated Forensic Analysis of macOS XProtect Behavioral Service database for DFIR
 
 .DESCRIPTION
   XProtect-Analyzer.ps1 is a PowerShell script utilized to simplify the processing of the XProtect Behavioral Service (XBS) database for DFIR.
@@ -64,13 +59,19 @@
   Note: The subdirectory 'XProtect-Analyzer' is automatically created.
 
 .PARAMETER Path
-  Specifies the path to the XProtect database (XPdb or XProtect.db).
+  Specifies the path to the input file (XPdb).
+
+.PARAMETER skipVT
+  Do not query VirusTotal with item hashes.
 
 .EXAMPLE
   PS> ./XProtect-Analyzer.ps1
 
 .EXAMPLE
   PS> ./XProtect-Analyzer.ps1 -Path "$HOME/Desktop/XPdb"
+
+.EXAMPLE
+  PS> ./XProtect-Analyzer.ps1 -Path "$HOME/Desktop/XPdb" -OutputDir "$HOME/Desktop/MacOS-Analyzer-Suite" -skipVT
 
 .NOTES
   Author - Martin Willing
@@ -88,7 +89,8 @@
 Param(
     [String]$Path,
     [String]$OutputDir,
-    [switch]$NoExcel = $true
+    [switch]$NoExcel = $true,
+    [Switch]$skipVT
 )
 
 #endregion CmdletBinding
@@ -245,7 +247,7 @@ Function Header {
 
 # Windows Title
 $DefaultWindowsTitle = $Host.UI.RawUI.WindowTitle
-$Host.UI.RawUI.WindowTitle = "XProtect-Analyzer v0.4 - Automated Processing of XProtect Behavioral Service Database for DFIR"
+$Host.UI.RawUI.WindowTitle = "XProtect-Analyzer v0.2 - Automated Forensic Analysis of macOS XProtect Behavioral Service database for DFIR"
 
 # Check if the PowerShell script is being run with elevated privileges
 if ($script:OnMacOS -or $script:OnLinux)
@@ -440,8 +442,8 @@ Write-Output "$Logo"
 Write-Output ""
 
 # Header
-Write-Output "XProtect-Analyzer v0.4 - Automated Processing of XProtect Behavioral Service Database for DFIR"
-Write-Output "(c) 2025 Martin Willing at Lethal-Forensics (https://lethal-forensics.com/)"
+Write-Output "XProtect-Analyzer v0.2 - Automated Forensic Analysis of macOS XProtect Behavioral Service database for DFIR"
+Write-Output "(c) 2026 Martin Willing at Lethal-Forensics (https://lethal-forensics.com/)"
 Write-Output ""
 
 # Analysis date (ISO 8601)
@@ -458,9 +460,8 @@ Write-Output ""
 
 #region Analysis
 
-# XProtect Behavioral Service (XBS) Database
-# XProtect is Apple's built-in malware detection system
-# Location: /private/var/protected/xprotect/XPdb
+# XProtect Behavior Service (XBS) Database
+# Location: /private/var/protected/xprotect/db/XPdb (macOS 13+)
 
 Function Invoke-XProtect {
 
@@ -474,8 +475,28 @@ if (!(Test-Path "$DatabaseFile" -PathType Leaf))
     Exit
 }
 
+# Check Signature (Magic Number)
+if ($PSEdition -eq "Core")
+{
+    $Bytes = (Get-Content -Path $DatabaseFile -AsByteStream -ReadCount 1 -TotalCount 16) # PowerShell 7
+}
+else
+{
+    $Bytes = (Get-Content -Path $DatabaseFile -Encoding Byte -ReadCount 1 -TotalCount 16) # PowerShell 5.1
+}
+
+$Signature = ([System.BitConverter]::ToString($Bytes)).Replace("-"," ") # SQLite format 3
+
+if (!($Signature -eq "53 51 4c 69 74 65 20 66 6f 72 6d 61 74 20 33 00")) # Magic Bytes
+{
+    Write-Host "[Error] No SQLite3 Database File provided." -ForegroundColor Red
+    Stop-Transcript
+    $Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
+    Exit
+}
+
 $FileName = [IO.Path]::GetFileName($DatabaseFile)
-Write-Output "[Info]  Processing XProtect Database ($FileName) ..."
+Write-Output "[Info]  Processing XProtect Behavioral Service Database ($FileName) ..."
 New-Item "$OUTPUT_FOLDER/CSV" -ItemType Directory -Force | Out-Null
 if ($script:EnableExcel)
 {
@@ -494,137 +515,132 @@ Write-Output "[Info]  SHA1 Hash: $SHA1"
 $SHA256 = (Get-FileHash -LiteralPath "$DatabaseFile" -Algorithm SHA256).Hash
 Write-Output "[Info]  SHA256 Hash: $SHA256"
 
-# File Size
-$FileSize = Get-FileSize((Get-Item "$DatabaseFile").Length)
-Write-Output "[Info]  File Size: $FileSize"
+# Input Size
+$InputSize = Get-FileSize((Get-Item "$DatabaseFile").Length)
+Write-Output "[Info]  Total Input Size: $InputSize"
 
-# Copy Database to Output Directory
-Copy-Item -Path "$DatabaseFile" -Destination "$OUTPUT_FOLDER/XPdb.db"
-
-# SQLite Metadata
-$UserVersion = & $SQLite3 -readonly "$OUTPUT_FOLDER/XPdb.db" "PRAGMA user_version;" 2>&1
-Write-Output "[Info]  XPdb Version: $UserVersion (PRAGMA user_version)"
-
-# Get Data
-$Query = "SELECT violated_rule,exec_path,responsible_path,identifier,cdhash,signature_identifier,team_identifier,exec_sha256,exec_notarized,exec_reported,xpdb_detection_type,timestamp FROM scan_results;"
-$Data = (& $SQLite3 -separator ',' -readonly "$OUTPUT_FOLDER/XPdb.db" "$Query" 2>&1) -replace "^", "ViolatedRule,ExecPath,ResponsiblePath,Identifier,CDHash,SignatureIdentifier,TeamIdentifier,ExecSHA256,ExecNotarized,ExecReported,DetectionType,Timestamp`n" | ConvertFrom-Csv
-
-# Count Records
-$Count = ($Data | Measure-Object).Count
-Write-Output "[Info]  Processing $Count records ..."
-
-# Processing data
-$Results = [Collections.Generic.List[PSObject]]::new()
-ForEach($Record in $Data)
+# Work on a copy (incl. WAL/SHM, which can hold events not yet checkpointed into the main file)
+$script:WorkingDB = "$OUTPUT_FOLDER/XPdb"
+Copy-Item -LiteralPath "$DatabaseFile" -Destination "$WorkingDB"
+foreach ($Suffix in @("-wal","-shm"))
 {
-    # ViolatedRule
-    $ViolatedRule = $Record.ViolatedRule
-
-    # ExecPath
-    $ExecPath = $Record.ExecPath
-
-    # ResponsiblePath
-    $ResponsiblePath = $Record.ResponsiblePath
-
-    # Identifier
-    $Identifier = $Record.Identifier
-
-    # CDHash
-    $CDHash = $Record.CDHash
-
-    # SignatureIdentifier
-    $SignatureIdentifier = $Record.SignatureIdentifier
-
-    # TeamIdentifier
-    $TeamIdentifier = $Record.TeamIdentifier
-
-    # ExecSHA256
-    $ExecSHA256 = $Record.ExecSHA256
-
-    # ExecNotarized
-    $Notarized = $Record.ExecNotarized
-    switch($Notarized)
+    if (Test-Path -LiteralPath "$DatabaseFile$Suffix" -PathType Leaf)
     {
-        "0" { $ExecNotarized = "0 - Not Notarized" }
-        "1" { $ExecNotarized = "1 - Notarized" }
-        default { $ExecNotarized = "$Notarized - Unknown" }
+        Copy-Item -LiteralPath "$DatabaseFile$Suffix" -Destination "$WorkingDB$Suffix"
     }
+}
 
-    # ExecReported
-    $Reported = $Record.ExecReported
-    switch($Reported)
-    {
-        "0" { $ExecReported = "0 - Not Reported" }
-        "1" { $ExecReported = "1 - Reported" }
-        default { $ExecReported = "$Reported - Unknown" }
-    }
+# Count Rows of SQLite3 Database (w/ thousands separators)
+$CountOutput = & $SQLite3 -readonly "$WorkingDB" 'SELECT COUNT(*) FROM EVENTS' 2>&1
+if ($LASTEXITCODE -ne 0)
+{
+    Write-Host "[Error] sqlite3 query failed: $CountOutput" -ForegroundColor Red
+    Stop-Transcript
+    $Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
+    Exit
+}
+[int]$Count = $CountOutput
+$Rows = '{0:N0}' -f $Count
+Write-Output "[Info]  Total Lines: $Rows"
 
-    # DetectionType
-    $Detection = $Record.DetectionType
-    switch($Detection)
-    {
-        "0" { $DetectionType = "0 - Unknown" }
-        "1" { $DetectionType = "1 - Malware" }
-        "2" { $DetectionType = "2 - PUP" }
-        default { $DetectionType = "$Detection - Unknown" }
-    }
+# EVENTS Table (Untouched)
+& $SQLite3 -readonly -csv -header "$WorkingDB" 'SELECT * FROM EVENTS' | Out-File "$OUTPUT_FOLDER/CSV/Untouched.csv" -Encoding UTF8
 
-    # Timestamp (Unix Epoch - Seconds)
-    if ($Record.Timestamp)
+if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/CSV/Untouched.csv") -and $Count -ge 1)
+{
+    $IMPORT = Import-Csv "$OUTPUT_FOLDER/CSV/Untouched.csv" -Delimiter ","
+    $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/XLSX/Untouched.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Events" -CellStyleSB {
+    param($WorkSheet)
+    if ($script:UseExcelStyling)
     {
-        $Timestamp = $Record.Timestamp
-        $EpochDate = [DateTime]"1/1/1970"
-        $TimeZone = [TimeZoneInfo]::FindSystemTimeZoneById('UTC')
-        $Timestamp_UTC = [TimeZoneInfo]::ConvertTimeFromUtc($EpochDate.AddSeconds($Timestamp), $TimeZone).ToString("yyyy-MM-dd HH:mm:ss")
+        $ColumnNumber = $WorkSheet.Dimension.End.Column
+        $ColumnName = (Get-ExcelColumnName $ColumnNumber).ColumnName
+        Set-Format -Address $WorkSheet.Cells["A1:$($ColumnName)1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+        $WorkSheet.Cells["A:$($ColumnName)"].Style.HorizontalAlignment="Center"
     }
-    else
+    }
+}
+
+# SQL Query
+$SQL = @"
+SELECT
+    dt AS 'DateTime',
+    violated_rule AS 'Bastion Rule',
+    exec_path AS 'Path',
+    exec_signing_id AS 'Identifier',
+    exec_team_id AS 'Team Identifier',
+    exec_sha256 AS 'SHA256',
+    CASE exec_is_notarized
+        WHEN 0 THEN 'No'
+        WHEN 1 THEN 'Yes'
+    END AS 'Notarized',
+    CASE reported
+        WHEN 0 THEN 'No'
+        WHEN 1 THEN 'Yes'
+    END AS 'Reported'
+FROM EVENTS
+"@
+
+$Results = @(& $SQLite3 -readonly -csv -header "$WorkingDB" "$SQL" | ConvertFrom-Csv)
+
+$Output = [Collections.Generic.List[PSObject]]::new()
+ForEach($Record in $Results)
+{
+    $DateTime = ""
+    if ($Record.DateTime)
     {
-        $Timestamp_UTC = ""
+        $Parsed = [datetime]::MinValue
+        if ([datetime]::TryParse($Record.DateTime, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AdjustToUniversal, [ref]$Parsed))
+        {
+            $DateTime = $Parsed.ToString("yyyy-MM-dd HH:mm:ss")
+        }
+        else
+        {
+            $DateTime = $Record.DateTime
+        }
     }
 
     $Line = [PSCustomObject]@{
-        "Violated Rule"         = $ViolatedRule
-        "Exec Path"             = $ExecPath
-        "Responsible Path"      = $ResponsiblePath
-        "Identifier"            = $Identifier
-        "CDHash"                = $CDHash
-        "Signature Identifier"  = $SignatureIdentifier
-        "Team Identifier"       = $TeamIdentifier
-        "Exec SHA256"           = $ExecSHA256
-        "Exec Notarized"        = $ExecNotarized
-        "Exec Reported"         = $ExecReported
-        "Detection Type"        = $DetectionType
-        "Timestamp (UTC)"       = $Timestamp_UTC
+    "DateTime"        = $DateTime
+    "Bastion Rule"    = $Record."Bastion Rule"
+    "Path"            = $Record.Path
+    "Identifier"      = $Record.Identifier
+    "Team Identifier" = $Record."Team Identifier"
+    "SHA256"          = $Record.SHA256
+    "Notarized"       = $Record.Notarized
+    "Reported"        = $Record.Reported
     }
 
-    $Results.Add($Line)
+    $Output.Add($Line)
 }
 
-$Results | Export-Csv -Path "$OUTPUT_FOLDER/CSV/XProtect.csv" -NoTypeInformation -Encoding UTF8
+$Output | Export-Csv -Path "$OUTPUT_FOLDER/CSV/XProtect-BehaviorService.csv" -NoTypeInformation -Encoding UTF8
 
 # XLSX
-if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/CSV/XProtect.csv"))
+if ($script:EnableExcel -and $Output.Count -ge 1)
 {
-    if ((Get-Item "$OUTPUT_FOLDER/CSV/XProtect.csv").Length -gt 0)
+    $IMPORT = Import-Csv "$OUTPUT_FOLDER/CSV/XProtect-BehaviorService.csv" -Delimiter "," -Encoding UTF8 | Sort-Object { $_.DateTime -as [datetime] } -Descending
+    $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/XLSX/XProtect-BehaviorService.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "XBS" -CellStyleSB {
+    param($WorkSheet)
+    if ($script:UseExcelStyling)
     {
-        $Import = Import-Csv "$OUTPUT_FOLDER/CSV/XProtect.csv" -Delimiter ","
-        $Import | Export-Excel -Path "$OUTPUT_FOLDER/XLSX/XProtect.xlsx" -NoNumberConversion * -FreezePane 2,3 -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "XProtect" -CellStyleSB {
-        param($WorkSheet)
-        if ($script:UseExcelStyling)
-        {
-            # BackgroundColor and FontColor for specific cells of TopRow
-            Set-Format -Address $WorkSheet.Cells["A1:L1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-            # HorizontalAlignment "Center" of columns I-L
-            $WorkSheet.Cells["I:L"].Style.HorizontalAlignment="Center"
-        }
-        }
+        # BackgroundColor and FontColor for specific cells of TopRow
+        Set-Format -Address $WorkSheet.Cells["A1:H1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+        # HorizontalAlignment "Center" of columns A-B and D-H
+        $WorkSheet.Cells["A:B"].Style.HorizontalAlignment="Center"
+        $WorkSheet.Cells["D:H"].Style.HorizontalAlignment="Center"
+        # ConditionalFormatting - Notarized
+        $LastRow = $WorkSheet.Dimension.End.Row
+        Add-ConditionalFormatting -Address $WorkSheet.Cells["G2:G$LastRow"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Yes",$G2)))' -BackgroundColor $Green
+        Add-ConditionalFormatting -Address $WorkSheet.Cells["G2:G$LastRow"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("No",$G2)))' -BackgroundColor Red
+    }
     }
 }
 
 # File Size (XLSX)
-if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/XLSX/XProtect.xlsx"))
+if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/XLSX/XProtect-BehaviorService.xlsx"))
 {
-    $Size = Get-FileSize((Get-Item "$OUTPUT_FOLDER/XLSX/XProtect.xlsx").Length)
+    $Size = Get-FileSize((Get-Item "$OUTPUT_FOLDER/XLSX/XProtect-BehaviorService.xlsx").Length)
     Write-Output "[Info]  File Size (XLSX): $Size"
 }
 
@@ -637,121 +653,90 @@ if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/XLSX/XProtect.xlsx"))
 
 #region Stats
 
-Function Get-Stats {
+Function script:Export-Stats {
+    Param($Stats, [string]$Name, [string]$WorkSheetName, [string]$CenterColumns)
 
-# Create Stats directory
-New-Item "$OUTPUT_FOLDER/Stats" -ItemType Directory -Force | Out-Null
-
-if (Test-Path "$OUTPUT_FOLDER/CSV/XProtect.csv")
-{
-    $Data = Import-Csv "$OUTPUT_FOLDER/CSV/XProtect.csv" -Delimiter ","
-    $Total = ($Data | Measure-Object).Count
-
-    # Violated Rule (Stats)
-    if ($Total -ge 1)
+    if ($script:EnableExcel)
     {
-        $Stats = $Data | Group-Object "Violated Rule" | Select-Object @{Name='Violated Rule'; Expression={if($_.Name){$_.Name}else{'N/A'}}},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Total)}} | Sort-Object Count -Descending
-        if ($script:EnableExcel)
+        $Stats | Export-Excel -Path "$OUTPUT_FOLDER/Stats/$Name.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "$WorkSheetName" -CellStyleSB {
+        param($WorkSheet)
+        if ($script:UseExcelStyling)
         {
-            $Stats | Export-Excel -Path "$OUTPUT_FOLDER/Stats/ViolatedRule.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "ViolatedRule" -CellStyleSB {
-            param($WorkSheet)
-            if ($script:UseExcelStyling)
-            {
-                Set-Format -Address $WorkSheet.Cells["A1:C1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-                $WorkSheet.Cells["B:C"].Style.HorizontalAlignment="Center"
-            }
-            }
+            Set-Format -Address $WorkSheet.Cells["A1:C1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            $WorkSheet.Cells[$CenterColumns].Style.HorizontalAlignment="Center"
         }
-        else
-        {
-            $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/ViolatedRule.csv" -NoTypeInformation -Encoding UTF8
         }
     }
-
-    # Detection Type (Stats)
-    if ($Total -ge 1)
+    else
     {
-        $Stats = $Data | Group-Object "Detection Type" | Select-Object @{Name='Detection Type'; Expression={if($_.Name){$_.Name}else{'N/A'}}},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Total)}} | Sort-Object Count -Descending
-        if ($script:EnableExcel)
-        {
-            $Stats | Export-Excel -Path "$OUTPUT_FOLDER/Stats/DetectionType.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "DetectionType" -CellStyleSB {
-            param($WorkSheet)
-            if ($script:UseExcelStyling)
-            {
-                Set-Format -Address $WorkSheet.Cells["A1:C1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-                $WorkSheet.Cells["A:C"].Style.HorizontalAlignment="Center"
-            }
-            }
-        }
-        else
-        {
-            $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/DetectionType.csv" -NoTypeInformation -Encoding UTF8
-        }
-    }
-
-    # Exec Notarized (Stats)
-    if ($Total -ge 1)
-    {
-        $Stats = $Data | Group-Object "Exec Notarized" | Select-Object @{Name='Exec Notarized'; Expression={if($_.Name){$_.Name}else{'N/A'}}},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Total)}} | Sort-Object Count -Descending
-        if ($script:EnableExcel)
-        {
-            $Stats | Export-Excel -Path "$OUTPUT_FOLDER/Stats/ExecNotarized.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "ExecNotarized" -CellStyleSB {
-            param($WorkSheet)
-            if ($script:UseExcelStyling)
-            {
-                Set-Format -Address $WorkSheet.Cells["A1:C1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-                $WorkSheet.Cells["A:C"].Style.HorizontalAlignment="Center"
-            }
-            }
-        }
-        else
-        {
-            $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/ExecNotarized.csv" -NoTypeInformation -Encoding UTF8
-        }
-    }
-
-    # Exec Reported (Stats)
-    if ($Total -ge 1)
-    {
-        $Stats = $Data | Group-Object "Exec Reported" | Select-Object @{Name='Exec Reported'; Expression={if($_.Name){$_.Name}else{'N/A'}}},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Total)}} | Sort-Object Count -Descending
-        if ($script:EnableExcel)
-        {
-            $Stats | Export-Excel -Path "$OUTPUT_FOLDER/Stats/ExecReported.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "ExecReported" -CellStyleSB {
-            param($WorkSheet)
-            if ($script:UseExcelStyling)
-            {
-                Set-Format -Address $WorkSheet.Cells["A1:C1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-                $WorkSheet.Cells["A:C"].Style.HorizontalAlignment="Center"
-            }
-            }
-        }
-        else
-        {
-            $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/ExecReported.csv" -NoTypeInformation -Encoding UTF8
-        }
-    }
-
-    # Team Identifier (Stats)
-    if ($Total -ge 1)
-    {
-        $Stats = $Data | Group-Object "Team Identifier" | Select-Object @{Name='Team Identifier'; Expression={if($_.Name){$_.Name}else{'N/A'}}},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Total)}} | Sort-Object Count -Descending
-        if ($script:EnableExcel)
-        {
-            $Stats | Export-Excel -Path "$OUTPUT_FOLDER/Stats/TeamIdentifier.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "TeamIdentifier" -CellStyleSB {
-            param($WorkSheet)
-            if ($script:UseExcelStyling)
-            {
-                Set-Format -Address $WorkSheet.Cells["A1:C1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
-                $WorkSheet.Cells["B:C"].Style.HorizontalAlignment="Center"
-            }
-            }
-        }
-        else
-        {
-            $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/TeamIdentifier.csv" -NoTypeInformation -Encoding UTF8
-        }
+        $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/$Name.csv" -NoTypeInformation -Encoding UTF8
     }
 }
+
+Function Get-Stats {
+
+New-Item "$OUTPUT_FOLDER/Stats" -ItemType Directory -Force | Out-Null
+
+if (!(Test-Path "$OUTPUT_FOLDER/CSV/XProtect-BehaviorService.csv")) { return }
+
+$XBS = @(Import-Csv "$OUTPUT_FOLDER/CSV/XProtect-BehaviorService.csv" -Delimiter "," -Encoding UTF8 | Sort-Object { $_.DateTime -as [datetime] })
+if ($XBS.Count -lt 1) { return }
+
+# Time Frame
+$StartDateTime = $XBS[0].DateTime
+$EndDateTime = $XBS[-1].DateTime
+Write-Output "[Info]  Log data from $StartDateTime UTC until $EndDateTime UTC"
+
+# Bastion Rules
+$Total = $XBS.Count
+$Count = ($XBS | Select-Object "Bastion Rule" -Unique | Measure-Object).Count
+Write-Output "[Info]  $Count violated Bastion Rules found ($Total)"
+
+# Signing Identifier
+$Count = ($XBS | Select-Object "Identifier" -Unique | Measure-Object).Count
+Write-Output "[Info]  $Count Signing Identifier found ($Total)"
+
+# Team Identifier
+$Count = ($XBS | Select-Object "Team Identifier" -Unique | Measure-Object).Count
+Write-Output "[Info]  $Count Team Identifier found ($Total)"
+
+# SHA256
+New-Item "$OUTPUT_FOLDER/TXT" -ItemType Directory -Force | Out-Null
+$SHA256 = @($XBS | Where-Object { $_.SHA256 -match "^[A-Fa-f0-9]{64}$" } | Select-Object SHA256 -Unique | Sort-Object SHA256).SHA256
+$SHA256 | Out-File "$OUTPUT_FOLDER/TXT/SHA256.txt" -Encoding UTF8
+Write-Output "[Info]  $($SHA256.Count) SHA256 Hash Value(s) found"
+
+# Bastion Rule (Stats)
+$Stats = $XBS | Group-Object "Bastion Rule" | Select-Object @{Name='Bastion Rule'; Expression={ $_.Values[0] }},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Total)}} | Sort-Object Count -Descending
+Export-Stats -Stats $Stats -Name "Bastion-Rules" -WorkSheetName "Bastion Rules" -CenterColumns "B:C"
+
+# Identifier (Stats)
+$Subset = @($XBS | Where-Object { $_.Identifier -ne "" })
+if ($Subset.Count -ge 1)
+{
+    $Stats = $Subset | Group-Object Identifier | Select-Object @{Name='Identifier'; Expression={ $_.Values[0] }},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Subset.Count)}} | Sort-Object Count -Descending
+    Export-Stats -Stats $Stats -Name "Identifier" -WorkSheetName "Identifier" -CenterColumns "B:C"
+}
+
+# Notarized (Stats)
+$Subset = @($XBS | Where-Object { $_.Notarized -ne "" })
+if ($Subset.Count -ge 1)
+{
+    $Stats = $Subset | Group-Object Notarized | Select-Object @{Name='Notarized'; Expression={ $_.Values[0] }},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Subset.Count)}} | Sort-Object Count -Descending
+    Export-Stats -Stats $Stats -Name "Notarized" -WorkSheetName "Notarized" -CenterColumns "A:C"
+}
+
+# Reported (Stats)
+$Subset = @($XBS | Where-Object { $_.Reported -ne "" })
+if ($Subset.Count -ge 1)
+{
+    $Stats = $Subset | Group-Object Reported | Select-Object @{Name='Reported'; Expression={ $_.Values[0] }},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Subset.Count)}} | Sort-Object Count -Descending
+    Export-Stats -Stats $Stats -Name "Reported" -WorkSheetName "Reported" -CenterColumns "A:C"
+}
+
+# Team Identifier (Stats)
+$Stats = $XBS | Group-Object "Team Identifier" | Select-Object @{Name='Team Identifier'; Expression={if($_.Name){$_.Name}else{'N/A'}}},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Total)}} | Sort-Object Count -Descending
+Export-Stats -Stats $Stats -Name "Team-Identifier" -WorkSheetName "Team Identifier" -CenterColumns "B:C"
 
 }
 
@@ -789,14 +774,10 @@ if ($script:OnWindows)
     $MessageTitle = "XProtect-Analyzer.ps1 (https://lethal-forensics.com/)"
     $ButtonType = "OK"
     $MessageIcon = "Information"
-    $Result = [System.Windows.Forms.MessageBox]::Show($MessageBody, $MessageTitle, $ButtonType, $MessageIcon)
+    [System.Windows.Forms.MessageBox]::Show($MessageBody, $MessageTitle, $ButtonType, $MessageIcon) | Out-Null
 
-    if ($Result -eq "OK" ) 
-    {
-        $Global:ProgressPreference = $OriginalProgressPreference
-        $Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
-        Exit
-    }
+    $Global:ProgressPreference = $OriginalProgressPreference
+    $Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
 }
 else
 {
@@ -819,11 +800,43 @@ else
 #############################################################################################################################################################################################
 #############################################################################################################################################################################################
 
+#region VirusTotal
+
+Function Invoke-VirusTotal {
+
+if ($skipVT.IsPresent) { return }
+
+$HashList = Join-Path (Join-Path $OUTPUT_FOLDER "TXT") "SHA256.txt"
+if (!(Test-Path $HashList) -or (Get-Item $HashList).Length -eq 0) { return }
+
+$VTScript = Join-Path $PSScriptRoot "VirusTotal-Analyzer.ps1"
+if (!(Test-Path $VTScript)) { return }
+
+$Title   = "VirusTotal-Analyzer"
+$Prompt  = "Do you want to check the item hashes on VirusTotal?"
+$Choices = [System.Management.Automation.Host.ChoiceDescription[]] @("&Yes", "&No")
+$Choice  = $host.UI.PromptForChoice($Title, $Prompt, $Choices, 0)
+
+if ($Choice -eq 0)
+{
+    $VTOutput = Join-Path $OUTPUT_FOLDER "VirusTotal"
+    New-Item $VTOutput -ItemType Directory -Force | Out-Null
+    & $VTScript -Path $HashList -OutputDir $VTOutput
+}
+
+}
+
+#endregion VirusTotal
+
+#############################################################################################################################################################################################
+#############################################################################################################################################################################################
+
 # Main
 Header
 Invoke-XProtect
 Get-Stats
 Footer
+Invoke-VirusTotal
 
 #############################################################################################################################################################################################
 #############################################################################################################################################################################################

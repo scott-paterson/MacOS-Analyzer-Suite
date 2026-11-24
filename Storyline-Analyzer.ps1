@@ -1,10 +1,10 @@
 # Storyline-Analyzer v0.2
 #
 # @author:    Martin Willing
-# @copyright: Copyright (c) 2025 Martin Willing. All rights reserved. Licensed under the MIT license.
+# @copyright: Copyright (c) 2026 Martin Willing. All rights reserved. Licensed under the MIT license.
 # @contact:   Any feedback or suggestions are always welcome and much appreciated - mwilling@lethal-forensics.com
 # @url:       https://lethal-forensics.com/
-# @date:      2025-11-20
+# @date:      2026-03-16
 #
 #
 # ██╗     ███████╗████████╗██╗  ██╗ █████╗ ██╗      ███████╗ ██████╗ ██████╗ ███████╗███╗   ██╗███████╗██╗ ██████╗███████╗
@@ -40,7 +40,7 @@
 #
 #
 # Tested on Windows 10 Pro (x64) Version 22H2 (10.0.19045.6456) and PowerShell 5.1 (5.1.19041.6456)
-# Tested on Windows 10 Pro (x64) Version 22H2 (10.0.19045.6456) and PowerShell 7.5.4
+# Tested on Windows 10 Pro (x64) Version 22H2 (10.0.19045.6456) and PowerShell 7.5.5
 # Tested on macOS with PowerShell 7.x
 #
 #
@@ -475,7 +475,7 @@ Write-Output ""
 
 # Header
 Write-Output "Storyline-Analyzer v0.2 - Automated Forensic Analysis of Aftermath Storyline for DFIR"
-Write-Output "(c) 2025 Martin Willing at Lethal-Forensics (https://lethal-forensics.com/)"
+Write-Output "(c) 2026 Martin Willing at Lethal-Forensics (https://lethal-forensics.com/)"
 Write-Output ""
 
 # Analysis date (ISO 8601)
@@ -604,7 +604,7 @@ if ($importOut)
 & $SQLite3 $DBPath $SQL
 
 # CSV
-& $SQLite3 -readonly -header -csv $DBPath "SELECT * FROM Storyline" | Out-File "$OUTPUT_FOLDER/CSV/Storyline.csv" -Encoding UTF8
+& $SQLite3 -readonly -csv -header $DBPath "SELECT * FROM Storyline" | Out-File "$OUTPUT_FOLDER/CSV/Storyline.csv" -Encoding UTF8
 
 # Get End Time
 $EndTime_Processing = (Get-Date)
@@ -707,7 +707,7 @@ ForEach ($Report in $ReportList)
     $SqlPath = "$SCRIPT_DIR/Queries/Storyline-Analyzer/$($Report.Name).sql"
     if (Test-Path $SqlPath)
     {
-        Get-Content $SqlPath | & $SQLite3 -readonly -header -csv $DBPath | Out-File "$OUTPUT_FOLDER/Reports/CSV/$($Report.Name).csv" -Encoding UTF8
+        Get-Content $SqlPath | & $SQLite3 -readonly -csv -header $DBPath | Out-File "$OUTPUT_FOLDER/Reports/CSV/$($Report.Name).csv" -Encoding UTF8
         
         if($script:EnableExcel -and ([int](& $xsv count "$OUTPUT_FOLDER/Reports/CSV/$($Report.Name).csv") -gt 0))
         {

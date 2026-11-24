@@ -1,10 +1,10 @@
-# Quarantine-Analyzer v0.3
+# Quarantine-Analyzer v0.2
 #
 # @author:    Martin Willing
-# @copyright: Copyright (c) 2025 Martin Willing. All rights reserved. Licensed under the MIT license.
+# @copyright: Copyright (c) 2026 Martin Willing. All rights reserved. Licensed under the MIT license.
 # @contact:   Any feedback or suggestions are always welcome and much appreciated - mwilling@lethal-forensics.com
 # @url:       https://lethal-forensics.com/
-# @date:      2025-11-20
+# @date:      2026-03-16
 #
 #
 # ██╗     ███████╗████████╗██╗  ██╗ █████╗ ██╗      ███████╗ ██████╗ ██████╗ ███████╗███╗   ██╗███████╗██╗ ██████╗███████╗
@@ -27,16 +27,15 @@
 #
 # Changelog:
 # Version 0.1
-# Release Date: 2024-06-22
+# Release Date: 2025-11-10
 # Initial Release
 #
 # Version 0.2
-# Release Date: 2024-11-20
-# Fixed: Minor Bug Fixes and Improvements
+# Release Date: 2025-11-28
+# Fixed: Minor fixes and improvements
 #
-# Version 0.3
-# Release Date: 2025-12-11
-# Added: Cross-platform support for macOS and Windows
+# Fork (scott-paterson/MacOS-Analyzer-Suite)
+# Added: Native macOS support
 #
 #
 # Tested on Windows 10 Pro (x64) Version 22H2 (10.0.19045.5011) and target PowerShell version 5.1 (5.1.19041.5007)
@@ -49,7 +48,7 @@
 
 <#
 .SYNOPSIS
-  Quarantine-Analyzer v0.3 - Automated Processing of LSQuarantine Database for DFIR
+  Quarantine-Analyzer v0.2 - Automated Processing of LSQuarantine Database for DFIR
 
 .DESCRIPTION
   Quarantine-Analyzer.ps1 is a PowerShell script utilized to simplify the processing of the LSQuarantine database (macOS quarantine events) for DFIR.
@@ -241,7 +240,7 @@ Function Header {
 
 # Windows Title
 $DefaultWindowsTitle = $Host.UI.RawUI.WindowTitle
-$Host.UI.RawUI.WindowTitle = "Quarantine-Analyzer v0.3 - Automated Processing of LSQuarantine Database for DFIR"
+$Host.UI.RawUI.WindowTitle = "Quarantine-Analyzer v0.2 - Automated Processing of LSQuarantine Database for DFIR"
 
 # Check if the PowerShell script is being run with elevated privileges
 if ($script:OnMacOS -or $script:OnLinux)
@@ -345,7 +344,7 @@ if(!($Path))
             [System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms") | Out-Null
             $OpenFileDialog = New-Object System.Windows.Forms.OpenFileDialog
             $OpenFileDialog.InitialDirectory = $InitialDirectory
-            $OpenFileDialog.Filter = "LSQuarantine Database|com.apple.LaunchServices.QuarantineEventsV2|All Files (*.*)|*.*"
+            $OpenFileDialog.Filter = "Quarantine Database|com.apple.LaunchServices.QuarantineEventsV2|All Files (*.*)|*.*"
             $OpenFileDialog.ShowDialog()
             $OpenFileDialog.Filename
             $OpenFileDialog.ShowHelp = $true
@@ -436,8 +435,8 @@ Write-Output "$Logo"
 Write-Output ""
 
 # Header
-Write-Output "Quarantine-Analyzer v0.3 - Automated Processing of LSQuarantine Database for DFIR"
-Write-Output "(c) 2025 Martin Willing at Lethal-Forensics (https://lethal-forensics.com/)"
+Write-Output "Quarantine-Analyzer v0.2 - Automated Processing of LSQuarantine Database for DFIR"
+Write-Output "(c) 2026 Martin Willing at Lethal-Forensics (https://lethal-forensics.com/)"
 Write-Output ""
 
 # Analysis date (ISO 8601)
@@ -471,7 +470,7 @@ if (!(Test-Path "$DatabaseFile" -PathType Leaf))
 }
 
 $FileName = [IO.Path]::GetFileName($DatabaseFile)
-Write-Output "[Info]  Processing LSQuarantine Database ($FileName) ..."
+Write-Output "[Info]  Processing Quarantine Database ($FileName) ..."
 New-Item "$OUTPUT_FOLDER/CSV" -ItemType Directory -Force | Out-Null
 if ($script:EnableExcel)
 {
@@ -512,7 +511,7 @@ $headers = @(
     "OriginURLString",
     "OriginAlias"
 )
-$raw = & $SQLite3 -separator ',' -readonly "$OUTPUT_FOLDER/QuarantineEventsV2.db" "$Query" 2>&1
+$raw = & $SQLite3 -csv -readonly "$OUTPUT_FOLDER/QuarantineEventsV2.db" "$Query" 2>&1
 if ($raw -and ($raw | Select-String -Pattern '^Error:' -Quiet))
 {
     Write-Host "[Error] sqlite3 query failed:" -ForegroundColor Red
@@ -568,19 +567,23 @@ ForEach($Record in $Data)
     # SenderAddress
     $SenderAddress = $Record.SenderAddress
 
-    # TypeNumber
+    # LSQuarantineTypeNumber (SANS FOR518 Poster)
+    # 0 - Web Browser
+    # 1 - Xcode
+    # 2 - Apple Mail
+    # 3 - iChat
+    # 6 - AirDrop
+    # 7 - Other App (e.g. Keka)
     $Type = $Record.TypeNumber
     switch($Type)
     {
-        "0" { $TypeNumber = "0 - Web Download" }
-        "1" { $TypeNumber = "1 - Email Attachment" }
-        "2" { $TypeNumber = "2 - iMessage Attachment" }
-        "3" { $TypeNumber = "3 - Calendar Event" }
-        "4" { $TypeNumber = "4 - App Store" }
-        "5" { $TypeNumber = "5 - AirDrop" }
-        "6" { $TypeNumber = "6 - Unknown" }
-        "7" { $TypeNumber = "7 - Bluetooth Transfer" }
-        default { $TypeNumber = "$Type - Unknown" }
+        "0" { $QuarantineType = "WebDownload" }
+        "1" { $QuarantineType = "OtherDownload" }
+        "2" { $QuarantineType = "EmailAttachment" }
+        "3" { $QuarantineType = "InstantMessageAttachment" }
+        "6" { $QuarantineType = "AirDrop" }
+        "7" { $QuarantineType = "OtherApp" }
+        default { $QuarantineType = "$Type" }
     }
 
     # OriginTitle (Website Title or Email Subject)
@@ -593,14 +596,14 @@ ForEach($Record in $Data)
     $OriginAlias = $Record.OriginAlias
 
     $Line = [PSCustomObject]@{
-        "Event Identifier"          = $EventIdentifier
-        "Timestamp (UTC)"           = $Timestamp_UTC
+        "File Identifier"           = $EventIdentifier
+        "Quarantine Time (UTC)"     = $Timestamp_UTC
         "Agent Bundle Identifier"   = $AgentBundleIdentifier
         "Agent Name"                = $AgentName
         "Data URL String"           = $DataURLString
         "Sender Name"               = $SenderName
         "Sender Address"            = $SenderAddress
-        "Type Number"               = $TypeNumber
+        "Quarantine Type"           = $QuarantineType
         "Origin Title"              = $OriginTitle
         "Origin URL String"         = $OriginURLString
         "Origin Alias"              = $OriginAlias
@@ -678,13 +681,34 @@ if (Test-Path "$OUTPUT_FOLDER/CSV/QuarantineEvents.csv")
         }
     }
 
-    # Type Number (Stats)
+    # Agent Name / Quarantine Type (Stats)
     if ($Total -ge 1)
     {
-        $Stats = $Data | Group-Object "Type Number" | Select-Object @{Name='Type Number'; Expression={if($_.Name){$_.Name}else{'N/A'}}},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Total)}} | Sort-Object Count -Descending
+        $Stats = $Data | Group-Object "Agent Name","Quarantine Type" | Select-Object @{Name='Agent Name'; Expression={if($_.Values[0]){$_.Values[0]}else{'N/A'}}},@{Name='Quarantine Type'; Expression={ $_.Values[1] }},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Total)}} | Sort-Object Count -Descending
         if ($script:EnableExcel)
         {
-            $Stats | Export-Excel -Path "$OUTPUT_FOLDER/Stats/TypeNumber.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "TypeNumber" -CellStyleSB {
+            $Stats | Export-Excel -Path "$OUTPUT_FOLDER/Stats/Agent-Name_Type.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Agent Name - Type" -CellStyleSB {
+            param($WorkSheet)
+            if ($script:UseExcelStyling)
+            {
+                Set-Format -Address $WorkSheet.Cells["A1:D1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+                $WorkSheet.Cells["A:D"].Style.HorizontalAlignment="Center"
+            }
+            }
+        }
+        else
+        {
+            $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/Agent-Name_Type.csv" -NoTypeInformation -Encoding UTF8
+        }
+    }
+
+    # Quarantine Type (Stats)
+    if ($Total -ge 1)
+    {
+        $Stats = $Data | Group-Object "Quarantine Type" | Select-Object @{Name='Quarantine Type'; Expression={if($_.Name){$_.Name}else{'N/A'}}},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Total)}} | Sort-Object Count -Descending
+        if ($script:EnableExcel)
+        {
+            $Stats | Export-Excel -Path "$OUTPUT_FOLDER/Stats/Quarantine-Type.xlsx" -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Quarantine Type" -CellStyleSB {
             param($WorkSheet)
             if ($script:UseExcelStyling)
             {
@@ -695,7 +719,7 @@ if (Test-Path "$OUTPUT_FOLDER/CSV/QuarantineEvents.csv")
         }
         else
         {
-            $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/TypeNumber.csv" -NoTypeInformation -Encoding UTF8
+            $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/Quarantine-Type.csv" -NoTypeInformation -Encoding UTF8
         }
     }
 

@@ -1,10 +1,10 @@
 # BTM-Analyzer v0.2
 #
 # @author:    Martin Willing
-# @copyright: Copyright (c) 2025 Martin Willing. All rights reserved. Licensed under the MIT license.
+# @copyright: Copyright (c) 2026 Martin Willing. All rights reserved. Licensed under the MIT license.
 # @contact:   Any feedback or suggestions are always welcome and much appreciated - mwilling@lethal-forensics.com
 # @url:       https://lethal-forensics.com/
-# @date:      2025-11-20
+# @date:      2026-03-16
 #
 #
 # ██╗     ███████╗████████╗██╗  ██╗ █████╗ ██╗      ███████╗ ██████╗ ██████╗ ███████╗███╗   ██╗███████╗██╗ ██████╗███████╗
@@ -32,7 +32,7 @@
 #
 #
 # Tested on Windows 10 Pro (x64) Version 22H2 (10.0.19045.6456) and PowerShell 5.1 (5.1.19041.6456)
-# Tested on Windows 10 Pro (x64) Version 22H2 (10.0.19045.6456) and PowerShell 7.5.4
+# Tested on Windows 10 Pro (x64) Version 22H2 (10.0.19045.6456) and PowerShell 7.5.5
 # Tested on macOS with PowerShell 7.x
 #
 #
@@ -375,7 +375,7 @@ Write-Output ""
 
 # Header
 Write-Output "BTM-Analyzer v0.2 - Automated Forensic Analysis of BTM Dump File for DFIR"
-Write-Output "(c) 2025 Martin Willing at Lethal-Forensics (https://lethal-forensics.com/)"
+Write-Output "(c) 2026 Martin Willing at Lethal-Forensics (https://lethal-forensics.com/)"
 Write-Output ""
 
 # Analysis date (ISO 8601)
@@ -452,7 +452,7 @@ Write-Output "[Info]  SHA256 Hash: $SHA256"
 $InputSize = Get-FileSize((Get-Item "$LogFile").Length)
 Write-Output "[Info]  Total Input Size: $InputSize"
 
-# Count rows of CSV (w/ thousands separators)
+# Count rows of TXT (w/ thousands separators)
 [int]$TotalLines = 0
 $Reader = New-Object IO.StreamReader "$LogFile"
 while($Reader.ReadLine() -ne $null){ $TotalLines++ }
@@ -477,9 +477,9 @@ ForEach ($Object in $Objects) {
 }
 
 # User ID's (UID)
-#  -2 = Appears to be a composite covering most Machgrount Items
-#   0 = root
-# 501 = primary admin user
+#  -2 = Appears to be a composite covering most Background Items
+#   0 = Root
+# 501 = Primary Admin User
 
 # List all UIDs
 # dscl . -list /Users UniqueID
