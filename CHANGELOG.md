@@ -17,11 +17,13 @@ All changes to the MacOS-Analyzer-Suite will be documented in this file.
 - KnockKnock-Analyzer (PowerShell 7): Signature Status/Signer always "Unknown" (Int64 lookup keys), flagged item count always 0 (`=` instead of `-eq`), jq filters with Windows PowerShell 5.1 quoting
 - VirusTotal-Analyzer: internet check used Windows-only APIs; summary and malicious-file alert only printed when ImportExcel was installed; "0 of N found" when all hashes were found
 - TCC-Analyzer (macOS): internet check uses TCP 443 instead of ping
+- TCC-Analyzer: a junk row (header values as data) was added after every record, and commas in values shifted columns
 - No more `-NoTypeInformation is obsolete` warnings on PowerShell 7.4+
 - SudoUsageActivity/BashActivity queries also match sudoers paths and zsh history
 
 ### Changed
 - Authenticode signature blocks removed from modified scripts
+- TCC-Analyzer: App Store (iTunes) lookup is opt-in with `-AppLookup`; by default no bundle IDs leave the machine
 
 ## [1.2.0] - 2026-03-16
 ### Added

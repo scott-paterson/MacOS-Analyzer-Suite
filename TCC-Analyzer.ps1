@@ -69,8 +69,15 @@
 .PARAMETER Path
   Specifies the path to the TCC.db database.
 
+.PARAMETER AppLookup
+  Opt-in. Looks up each bundle ID on Apple's App Store API (itunes.apple.com) to add app and developer names (CSV/TCC_iTunes.csv).
+  Off by default because it sends bundle IDs from the evidence to Apple.
+
 .EXAMPLE
   PS> ./TCC-Analyzer.ps1
+
+.EXAMPLE
+  PS> ./TCC-Analyzer.ps1 -Path "$HOME/Desktop/TCC.db" -AppLookup
 
 .EXAMPLE
   PS> ./TCC-Analyzer.ps1 -Path "$HOME/Desktop/TCC.db"
@@ -94,7 +101,8 @@
 Param(
     [String]$Path,
     [String]$OutputDir,
-    [switch]$NoExcel = $true
+    [switch]$NoExcel = $true,
+    [switch]$AppLookup
 )
 
 #endregion CmdletBinding
@@ -572,21 +580,21 @@ if ($UserVersion -lt 17)
 {
     # Get Data
     $Query = "SELECT service,client,client_type,auth_value,auth_reason,indirect_object_identifier FROM access;"
-    $Data = (& $SQLite3 -separator ',' -readonly "$OUTPUT_FOLDER/TCC.db" "$Query" 2>&1) -replace "^", "Service,Client,Client Type,Authorization Value,Authorization Reason,Indirect Object Identifier`n" | ConvertFrom-Csv
+    $Data = & $SQLite3 -readonly -csv "$OUTPUT_FOLDER/TCC.db" "$Query" | ConvertFrom-Csv -Header "Service", "Client", "Client Type", "Authorization Value", "Authorization Reason", "Indirect Object Identifier"
 }
 # TCC.db (UserVersion 17-21)
 elseif (($UserVersion -gt 16) -And ($UserVersion -lt 22))
 {
     # Get Data
     $Query = "SELECT service,client,client_type,auth_value,auth_reason,indirect_object_identifier,last_modified FROM access;"
-    $Data = (& $SQLite3 -separator ',' -readonly "$OUTPUT_FOLDER/TCC.db" "$Query" 2>&1) -replace "^", "Service,Client,Client Type,Authorization Value,Authorization Reason,Indirect Object Identifier,Last Modified`n" | ConvertFrom-Csv
+    $Data = & $SQLite3 -readonly -csv "$OUTPUT_FOLDER/TCC.db" "$Query" | ConvertFrom-Csv -Header "Service", "Client", "Client Type", "Authorization Value", "Authorization Reason", "Indirect Object Identifier", "Last Modified"
 }
 # TCC.db (UserVersion 22+)
 elseif ($UserVersion -gt 21)
 {
     # Get Data
     $Query = "SELECT service,client,client_type,auth_value,auth_reason,indirect_object_identifier,last_modified,pid_version,boot_uuid FROM access;"
-    $Data = (& $SQLite3 -separator ',' -readonly "$OUTPUT_FOLDER/TCC.db" "$Query" 2>&1) -replace "^", "Service,Client,Client Type,Authorization Value,Authorization Reason,Indirect Object Identifier,Last Modified,PID Version,Boot UUID`n" | ConvertFrom-Csv
+    $Data = & $SQLite3 -readonly -csv "$OUTPUT_FOLDER/TCC.db" "$Query" | ConvertFrom-Csv -Header "Service", "Client", "Client Type", "Authorization Value", "Authorization Reason", "Indirect Object Identifier", "Last Modified", "PID Version", "Boot UUID"
 }
 
 # Count Records
@@ -1035,7 +1043,14 @@ else
 # Main
 Header
 TCC
-Get-AppInfo
+if ($AppLookup)
+{
+    Get-AppInfo
+}
+else
+{
+    Write-Host "[Info]  Skipping App Store lookup (use -AppLookup to enable)" -ForegroundColor Yellow
+}
 Get-Stats
 Footer
 

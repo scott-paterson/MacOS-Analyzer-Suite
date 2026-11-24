@@ -87,7 +87,12 @@ sudo pwsh ./TCC-Analyzer.ps1 -Path "/Library/Application Support/com.apple.TCC/T
 
 # User TCC database
 pwsh ./TCC-Analyzer.ps1 -Path "$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+
+# Opt-in: add app and developer names from Apple's App Store API (CSV/TCC_iTunes.csv)
+pwsh ./TCC-Analyzer.ps1 -Path "$HOME/Library/Application Support/com.apple.TCC/TCC.db" -AppLookup
 ```
+
+By default TCC-Analyzer runs fully offline. `-AppLookup` sends every bundle ID in the database to `itunes.apple.com`, so leave it off for sensitive cases. Only App Store apps resolve; Developer ID and system apps come back blank.
 
 ### Quarantine-Analyzer
 
