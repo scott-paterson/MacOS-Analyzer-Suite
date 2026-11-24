@@ -17,6 +17,9 @@
 #
 # Dependencies:
 #
+# ImportExcel v7.8.10 (2024-10-21) - optional, only for XLSX output (-NoExcel:$false)
+# https://github.com/dfinke/ImportExcel
+#
 # jq v1.8.1 (2025-07-01)
 # https://jqlang.org/ --> jq-windows-amd64.exe
 # https://github.com/stedolan/jq
@@ -63,6 +66,9 @@
 .PARAMETER skipVT
   Do not query VirusTotal with item hashes.
 
+.PARAMETER NoExcel
+  XLSX output is disabled by default (CSV only). To create XLSX as well, install the ImportExcel module and use -NoExcel:$false.
+
 .EXAMPLE
   PS> .\KnockKnock-Analyzer.ps1
 
@@ -91,6 +97,7 @@
 Param(
     [String]$Path,
     [String]$OutputDir,
+    [switch]$NoExcel = $true,
     [Switch]$skipVT
 )
 
@@ -159,6 +166,13 @@ if ($PSVersionTable.PSVersion.Major -ge 6)
 {
     $script:OnWindows = $IsWindows
     $script:OnMacOS   = $IsMacOS
+}
+
+# Excel export toggle (optional)
+$script:EnableExcel = $false
+if (-not $NoExcel -and (Get-Module -ListAvailable -Name ImportExcel))
+{
+    $script:EnableExcel = $true
 }
 
 # Colors
@@ -231,6 +245,28 @@ if ($script:OnWindows -and !([Security.Principal.WindowsPrincipal] [Security.Pri
 {
     Write-Host "[Error] This PowerShell script must be run with admin rights." -ForegroundColor Red
     Exit
+}
+
+# ImportExcel is optional
+if (-not $script:EnableExcel)
+{
+    if ($NoExcel)
+    {
+        if ($PSBoundParameters.ContainsKey('NoExcel'))
+        {
+            Write-Host "[Info]  -NoExcel specified. XLSX output will be skipped." -ForegroundColor Yellow
+        }
+        else
+        {
+            Write-Host "[Info]  XLSX output is disabled by default. CSV output will be created." -ForegroundColor Yellow
+            Write-Host "[Info]  To enable XLSX (optional): install ImportExcel and run with -NoExcel:`$false" -ForegroundColor Yellow
+        }
+    }
+    else
+    {
+        Write-Host "[Info]  ImportExcel not installed. XLSX output will be skipped." -ForegroundColor Yellow
+        Write-Host "[Info]  Install (optional): Install-Module -Name ImportExcel -Scope CurrentUser" -ForegroundColor Yellow
+    }
 }
 
 # Check if jq exists
@@ -517,6 +553,10 @@ Write-Output "[Info]  Total Lines: $Rows"
 # Processing KnockKnock Findings (KnockKnock_Results_yyyy-MM-dd.json)
 New-Item "$OUTPUT_FOLDER/KnockKnock/JSON" -ItemType Directory -Force | Out-Null
 New-Item "$OUTPUT_FOLDER/KnockKnock/CSV" -ItemType Directory -Force | Out-Null
+if ($script:EnableExcel)
+{
+    New-Item "$OUTPUT_FOLDER/KnockKnock/XLSX" -ItemType Directory -Force | Out-Null
+}
 
 # Check for KnockKnock Pretty Format
 if ($Count -eq "1")
@@ -822,7 +862,7 @@ $StatusKeys = @{
 
 #############################################################################################################################################################################################
 
-# CSV
+# CSV / XLSX
 
 # Check if VirusTotal Lookup was enabled
 if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitive -Quiet)
@@ -910,6 +950,32 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/1-AuthorizationPlugins.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/1-AuthorizationPlugins.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/1-AuthorizationPlugins.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/1-AuthorizationPlugins.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/1-AuthorizationPlugins.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Authorization Plugins" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:L1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and C-K
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["C:K"].Style.HorizontalAlignment="Center"
+            # ConditionalFormatting - VirusTotal
+            $LastRow = $WorkSheet.Dimension.End.Row
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G2:$LastRow"] -WorkSheet $WorkSheet -RuleType 'Expression' '(ISERROR(FIND("0/",$G1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("0/",$G1)))' -BackgroundColor $Green
+            # ConditionalFormatting - Signature Status
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Valid",$I1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Unsigned",$I1)))' -BackgroundColor Red
+            # ConditionalFormatting - Signing Signer
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Apple",$J1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("AdHoc",$J1)))' -BackgroundColor $Orange
+            }
+        }
+    }
 
     # 2. Background Managed Tasks
     $Records = $Data.'Background Managed Tasks'
@@ -1015,6 +1081,37 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/2-BackgroundManagedTasks.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/2-BackgroundManagedTasks.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/2-BackgroundManagedTasks.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/2-BackgroundManagedTasks.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/2-BackgroundManagedTasks.xlsx" -NoNumberConversion * -FreezePane 2,2 -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Background Managed Tasks" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:M1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and D-L
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["D:L"].Style.HorizontalAlignment="Center"
+            # ConditionalFormatting - VirusTotal
+            $LastRow = $WorkSheet.Dimension.End.Row
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G2:$LastRow"] -WorkSheet $WorkSheet -RuleType 'Expression' '(ISERROR(FIND("0/",$G1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("0/",$G1)))' -BackgroundColor $Green
+            # ConditionalFormatting - Signing Flags
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Not Signed",$H1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("CS_ADHOC",$H1)))' -BackgroundColor $Orange
+            # ConditionalFormatting - IsNotarized
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("True",$I1)))' -BackgroundColor $Green
+            # ConditionalFormatting - Signature Status
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Valid",$J1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Unsigned",$J1)))' -BackgroundColor Red
+            # ConditionalFormatting - Signing Signer
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["K:K"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Apple",$K1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["K:K"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("AdHoc",$K1)))' -BackgroundColor $Orange
+            }
+        }
+    }
 
     # 3. Browser Extensions
     $Records = $Data.'Browser Extensions'
@@ -1034,6 +1131,22 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/3-BrowserExtensions.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/3-BrowserExtensions.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/3-BrowserExtensions.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/3-BrowserExtensions.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/3-BrowserExtensions.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Browser Extensions" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:E1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and C-E
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["C:E"].Style.HorizontalAlignment="Center"
+            }
+        }
+    }
 
     # 4. Cron Jobs
     $Records = $Data.'Cron Jobs'
@@ -1050,6 +1163,19 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/4-CronJobs.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/4-CronJobs.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/4-CronJobs.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/4-CronJobs.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/4-CronJobs.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Cron Jobs" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:B1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            }
+        }
+    }
 
     # 5. Directory Services Plugins
     # TODO
@@ -1140,6 +1266,35 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/6-DockTilesPlugins.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/6-DockTilesPlugins.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/6-DockTilesPlugins.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/6-DockTilesPlugins.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/6-DockTilesPlugins.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Dock Tiles Plugins" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:L1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and C-K
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["C:K"].Style.HorizontalAlignment="Center"
+            # ConditionalFormatting - VirusTotal
+            $LastRow = $WorkSheet.Dimension.End.Row
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G2:$LastRow"] -WorkSheet $WorkSheet -RuleType 'Expression' '(ISERROR(FIND("0/",$G1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("0/",$G1)))' -BackgroundColor $Green
+            # ConditionalFormatting - Signing Flags
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Not Signed",$H1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("CS_ADHOC",$H1)))' -BackgroundColor $Orange        
+            # ConditionalFormatting - Signature Status
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Valid",$I1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Unsigned",$I1)))' -BackgroundColor Red
+            # ConditionalFormatting - Signing Signer
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Apple",$J1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("AdHoc",$J1)))' -BackgroundColor $Orange
+            }
+        }
+    }
 
     # 7. Event Rules
     # TODO
@@ -1241,6 +1396,37 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/8-ExtensionsWidgets.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/8-ExtensionsWidgets.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/8-ExtensionsWidgets.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/8-ExtensionsWidgets.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/8-ExtensionsWidgets.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Extensions and Widgets" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:M1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and C-L
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["C:L"].Style.HorizontalAlignment="Center"
+            # ConditionalFormatting - VirusTotal
+            $LastRow = $WorkSheet.Dimension.End.Row
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G2:$LastRow"] -WorkSheet $WorkSheet -RuleType 'Expression' '(ISERROR(FIND("0/",$G1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("0/",$G1)))' -BackgroundColor $Green
+            # ConditionalFormatting - Signing Flags
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Not Signed",$H1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("CS_ADHOC",$H1)))' -BackgroundColor $Orange
+            # ConditionalFormatting - IsNotarized
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("True",$I1)))' -BackgroundColor $Green
+            # ConditionalFormatting - Signature Status
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Valid",$J1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Unsigned",$J1)))' -BackgroundColor Red
+            # ConditionalFormatting - Signing Signer
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["K:K"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Apple",$K1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["K:K"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("AdHoc",$K1)))' -BackgroundColor $Orange
+            }
+        }
+    }
 
     # 9. Kernel Extensions
     $Records = $Data.'Kernel Extensions'
@@ -1346,6 +1532,37 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/9-KernelExtensions.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/9-KernelExtensions.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/9-KernelExtensions.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/9-KernelExtensions.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/9-KernelExtensions.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Kernel Extensions" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:M1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and C-L
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["C:L"].Style.HorizontalAlignment="Center"
+            # ConditionalFormatting - VirusTotal
+            $LastRow = $WorkSheet.Dimension.End.Row
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G2:$LastRow"] -WorkSheet $WorkSheet -RuleType 'Expression' '(ISERROR(FIND("0/",$G1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("0/",$G1)))' -BackgroundColor $Green
+            # ConditionalFormatting - Signing Flags
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Not Signed",$H1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("CS_ADHOC",$H1)))' -BackgroundColor $Orange
+            # ConditionalFormatting - IsNotarized
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("True",$I1)))' -BackgroundColor $Green
+            # ConditionalFormatting - Signature Status
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Valid",$J1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Unsigned",$J1)))' -BackgroundColor Red
+            # ConditionalFormatting - Signing Signer
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["K:K"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Apple",$K1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["K:K"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("AdHoc",$K1)))' -BackgroundColor $Orange
+            }
+        }
+    }
 
     # 10. Launch Items
     $Records = $Data.'Launch Items'
@@ -1451,6 +1668,37 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/10-LaunchItems.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/10-LaunchItems.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/10-LaunchItems.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/10-LaunchItems.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/10-LaunchItems.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Launch Items" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:M1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and D-L
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["D:L"].Style.HorizontalAlignment="Center"
+            # ConditionalFormatting - VirusTotal
+            $LastRow = $WorkSheet.Dimension.End.Row
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G2:$LastRow"] -WorkSheet $WorkSheet -RuleType 'Expression' '(ISERROR(FIND("0/",$G1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("0/",$G1)))' -BackgroundColor $Green
+            # ConditionalFormatting - Signing Flags
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Not Signed",$H1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("CS_ADHOC",$H1)))' -BackgroundColor $Orange
+            # ConditionalFormatting - IsNotarized
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("True",$I1)))' -BackgroundColor $Green
+            # ConditionalFormatting - Signature Status
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Valid",$J1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Unsigned",$J1)))' -BackgroundColor Red
+            # ConditionalFormatting - Signing Signer
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["K:K"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Apple",$K1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["K:K"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("AdHoc",$K1)))' -BackgroundColor $Orange
+            }
+        }
+    }
 
     # 11. Library Inserts
     # TODO
@@ -1562,6 +1810,37 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/13-LoginItems.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/13-LoginItems.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/13-LoginItems.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/13-LoginItems.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/13-LoginItems.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Login Items" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:M1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and C-L
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["C:L"].Style.HorizontalAlignment="Center"
+            # ConditionalFormatting - VirusTotal
+            $LastRow = $WorkSheet.Dimension.End.Row
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G2:$LastRow"] -WorkSheet $WorkSheet -RuleType 'Expression' '(ISERROR(FIND("0/",$G1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("0/",$G1)))' -BackgroundColor $Green
+            # ConditionalFormatting - Signing Flags
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Not Signed",$H1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("CS_ADHOC",$H1)))' -BackgroundColor $Orange
+            # ConditionalFormatting - IsNotarized
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("True",$I1)))' -BackgroundColor $Green
+            # ConditionalFormatting - Signature Status
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Valid",$J1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Unsigned",$J1)))' -BackgroundColor Red
+            # ConditionalFormatting - Signing Signer
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["K:K"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Apple",$K1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["K:K"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("AdHoc",$K1)))' -BackgroundColor $Orange
+            }
+        }
+    }
 
     # 14. Login/Logout Hooks
     # TODO
@@ -1600,6 +1879,29 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/15-PeriodicScripts.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/15-PeriodicScripts.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/15-PeriodicScripts.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/15-PeriodicScripts.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/15-PeriodicScripts.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Periodic Scripts" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:H1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and C-H
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["C:H"].Style.HorizontalAlignment="Center"
+            # ConditionalFormatting - VirusTotal
+            $LastRow = $WorkSheet.Dimension.End.Row
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G2:$LastRow"] -WorkSheet $WorkSheet -RuleType 'Expression' '(ISERROR(FIND("0/",$G1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("0/",$G1)))' -BackgroundColor $Green
+            # ConditionalFormatting - Signature Status
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Valid",$H1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Unsigned",$H1)))' -BackgroundColor Red
+            }
+        }
+    }
 
     # 16. Quicklook Plugins
     $Records = $Data.'Quicklook Plugins'
@@ -1694,6 +1996,35 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/16-QuicklookPlugins.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/16-QuicklookPlugins.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/16-QuicklookPlugins.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/16-QuicklookPlugins.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/16-QuicklookPlugins.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Quicklook Plugins" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:L1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and C-K
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["C:K"].Style.HorizontalAlignment="Center"
+            # ConditionalFormatting - VirusTotal
+            $LastRow = $WorkSheet.Dimension.End.Row
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G2:$LastRow"] -WorkSheet $WorkSheet -RuleType 'Expression' '(ISERROR(FIND("0/",$G1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("0/",$G1)))' -BackgroundColor $Green
+            # ConditionalFormatting - Signing Flags
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Not Signed",$H1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("CS_ADHOC",$H1)))' -BackgroundColor $Orange        
+            # ConditionalFormatting - Signature Status
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Valid",$I1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Unsigned",$I1)))' -BackgroundColor Red
+            # ConditionalFormatting - Signing Signer
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Apple",$J1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("AdHoc",$J1)))' -BackgroundColor $Orange
+            }
+        }
+    }
 
     # 17. Shell Configuration Files
     $Records = $Data.'Shell Configuration Files'
@@ -1731,6 +2062,28 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/17-ShellConfigurationFiles.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/17-ShellConfigurationFiles.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/17-ShellConfigurationFiles.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/17-ShellConfigurationFiles.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/17-ShellConfigurationFiles.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Shell Configuration Files" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:I1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and C-I
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["C:I"].Style.HorizontalAlignment="Center"
+            # ConditionalFormatting - VirusTotal
+            $LastRow = $WorkSheet.Dimension.End.Row
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G2:$LastRow"] -WorkSheet $WorkSheet -RuleType 'Expression' '(ISERROR(FIND("0/",$G1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("0/",$G1)))' -BackgroundColor $Green
+            # ConditionalFormatting - Status Description
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Unsigned",$I1)))' -FontColor Red
+            }
+        }
+    }
 
     # 18. Spotlight Importers
     $Records = $Data.'Spotlight Importers'
@@ -1825,6 +2178,35 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/18-SpotlightImporters.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/18-SpotlightImporters.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/18-SpotlightImporters.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/18-SpotlightImporters.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/18-SpotlightImporters.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Spotlight Importers" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:L1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and C-K
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["C:K"].Style.HorizontalAlignment="Center"
+            # ConditionalFormatting - VirusTotal
+            $LastRow = $WorkSheet.Dimension.End.Row
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G2:$LastRow"] -WorkSheet $WorkSheet -RuleType 'Expression' '(ISERROR(FIND("0/",$G1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("0/",$G1)))' -BackgroundColor $Green
+            # ConditionalFormatting - Signing Flags
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Not Signed",$H1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("CS_ADHOC",$H1)))' -BackgroundColor $Orange        
+            # ConditionalFormatting - Signature Status
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Valid",$I1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Unsigned",$I1)))' -BackgroundColor Red
+            # ConditionalFormatting - Signing Signer
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Apple",$J1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("AdHoc",$J1)))' -BackgroundColor $Orange
+            }
+        }
+    }
 
     # 19. Startup Scripts
     $Records = $Data.'Startup Scripts'
@@ -1860,6 +2242,29 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/19-StartupScripts.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/19-StartupScripts.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/19-StartupScripts.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/19-StartupScripts.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/19-StartupScripts.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Startup Scripts" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:H1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and C-H
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["C:H"].Style.HorizontalAlignment="Center"
+            # ConditionalFormatting - VirusTotal
+            $LastRow = $WorkSheet.Dimension.End.Row
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G2:$LastRow"] -WorkSheet $WorkSheet -RuleType 'Expression' '(ISERROR(FIND("0/",$G1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("0/",$G1)))' -BackgroundColor $Green
+            # ConditionalFormatting - Signature Status
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Valid",$H1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Unsigned",$H1)))' -BackgroundColor Red
+            }
+        }
+    }
 
     # 20. System Extensions
     $Records = $Data.'System Extensions'
@@ -1965,6 +2370,37 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/20-SystemExtensions.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/20-SystemExtensions.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/20-SystemExtensions.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/20-SystemExtensions.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/20-SystemExtensions.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "System Extensions" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:M1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and C-L
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["C:L"].Style.HorizontalAlignment="Center"
+            # ConditionalFormatting - VirusTotal
+            $LastRow = $WorkSheet.Dimension.End.Row
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G2:$LastRow"] -WorkSheet $WorkSheet -RuleType 'Expression' '(ISERROR(FIND("0/",$G1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("0/",$G1)))' -BackgroundColor $Green
+            # ConditionalFormatting - Signing Flags
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Not Signed",$H1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("CS_ADHOC",$H1)))' -BackgroundColor $Orange
+            # ConditionalFormatting - IsNotarized
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("True",$I1)))' -BackgroundColor $Green
+            # ConditionalFormatting - Signature Status
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Valid",$J1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Unsigned",$J1)))' -BackgroundColor Red
+            # ConditionalFormatting - Signing Signer
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["K:K"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Apple",$K1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["K:K"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("AdHoc",$K1)))' -BackgroundColor $Orange
+            }
+        }
+    }
 }
 else
 {
@@ -2062,6 +2498,28 @@ else
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/1-AuthorizationPlugins.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/1-AuthorizationPlugins.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/1-AuthorizationPlugins.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/1-AuthorizationPlugins.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/1-AuthorizationPlugins.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Authorization Plugins" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:K1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and C-K
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["C:K"].Style.HorizontalAlignment="Center"
+            # ConditionalFormatting - Signature Status
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Valid",$H1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Unsigned",$H1)))' -BackgroundColor Red
+            # ConditionalFormatting - Signing Signer
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Apple",$I1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("AdHoc",$I1)))' -BackgroundColor $Orange
+            }
+        }
+    }
 
     # 2. Background Managed Tasks
     $Records = $Data.'Background Managed Tasks'
@@ -2166,6 +2624,33 @@ else
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/2-BackgroundManagedTasks.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/2-BackgroundManagedTasks.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/2-BackgroundManagedTasks.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/2-BackgroundManagedTasks.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/2-BackgroundManagedTasks.xlsx" -NoNumberConversion * -FreezePane 2,2 -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Background Managed Tasks" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:L1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and D-K
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["D:J"].Style.HorizontalAlignment="Center"
+            # ConditionalFormatting - Signing Flags
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Not Signed",$G1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("CS_ADHOC",$G1)))' -BackgroundColor $Orange
+            # ConditionalFormatting - IsNotarized
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("True",$H1)))' -BackgroundColor $Green
+            # ConditionalFormatting - Signature Status
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Valid",$I1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Unsigned",$I1)))' -BackgroundColor Red
+            # ConditionalFormatting - Signing Signer
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Apple",$J1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("AdHoc",$J1)))' -BackgroundColor $Orange
+            }
+        }
+    }
 
     # 3. Browser Extensions
     $Records = $Data.'Browser Extensions'
@@ -2185,6 +2670,22 @@ else
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/3-BrowserExtensions.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/3-BrowserExtensions.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/3-BrowserExtensions.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/3-BrowserExtensions.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/3-BrowserExtensions.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Browser Extensions" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:E1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and C-E
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["C:E"].Style.HorizontalAlignment="Center"
+            }
+        }
+    }
 
     # 4. Cron Jobs
     $Records = $Data.'Cron Jobs'
@@ -2201,6 +2702,19 @@ else
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/4-CronJobs.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/4-CronJobs.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/4-CronJobs.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/4-CronJobs.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/4-CronJobs.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Cron Jobs" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:B1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            }
+        }
+    }
 
     # 5. Directory Services Plugins
     # TODO
@@ -2297,6 +2811,31 @@ else
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/6-DockTilesPlugins.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/6-DockTilesPlugins.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/6-DockTilesPlugins.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/6-DockTilesPlugins.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/6-DockTilesPlugins.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Dock Tiles Plugins" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:K1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and C-K
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["C:K"].Style.HorizontalAlignment="Center"
+            # ConditionalFormatting - Signing Flags
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Not Signed",$G1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("CS_ADHOC",$G1)))' -BackgroundColor $Orange        
+            # ConditionalFormatting - Signature Status
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Valid",$H1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Unsigned",$H1)))' -BackgroundColor Red
+            # ConditionalFormatting - Signing Signer
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Apple",$I1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("AdHoc",$I1)))' -BackgroundColor $Orange
+            }
+        }
+    }
 
     # 7. Event Rules
     # TODO
@@ -2397,6 +2936,33 @@ else
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/8-ExtensionsWidgets.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/8-ExtensionsWidgets.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/8-ExtensionsWidgets.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/8-ExtensionsWidgets.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/8-ExtensionsWidgets.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Extensions and Widgets" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:L1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and D-K
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["C:K"].Style.HorizontalAlignment="Center"
+            # ConditionalFormatting - Signing Flags
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Not Signed",$G1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("CS_ADHOC",$G1)))' -BackgroundColor $Orange
+            # ConditionalFormatting - IsNotarized
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("True",$H1)))' -BackgroundColor $Green
+            # ConditionalFormatting - Signature Status
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Valid",$I1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Unsigned",$I1)))' -BackgroundColor Red
+            # ConditionalFormatting - Signing Signer
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Apple",$J1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("AdHoc",$J1)))' -BackgroundColor $Orange
+            }
+        }
+    }
 
     # 9. Kernel Extensions
     $Records = $Data.'Kernel Extensions'
@@ -2501,6 +3067,33 @@ else
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/9-KernelExtensions.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/9-KernelExtensions.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/9-KernelExtensions.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/9-KernelExtensions.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/9-KernelExtensions.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Kernel Extensions" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:L1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and D-K
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["C:K"].Style.HorizontalAlignment="Center"
+            # ConditionalFormatting - Signing Flags
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Not Signed",$G1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("CS_ADHOC",$G1)))' -BackgroundColor $Orange
+            # ConditionalFormatting - IsNotarized
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("True",$H1)))' -BackgroundColor $Green
+            # ConditionalFormatting - Signature Status
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Valid",$I1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Unsigned",$I1)))' -BackgroundColor Red
+            # ConditionalFormatting - Signing Signer
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Apple",$J1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("AdHoc",$J1)))' -BackgroundColor $Orange
+            }
+        }
+    }
 
     # 10. Launch Items
     $Records = $Data.'Launch Items'
@@ -2605,6 +3198,33 @@ else
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/10-LaunchItems.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/10-LaunchItems.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/10-LaunchItems.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/10-LaunchItems.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/10-LaunchItems.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Launch Items" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:L1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and D-K
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["D:K"].Style.HorizontalAlignment="Center"
+            # ConditionalFormatting - Signing Flags
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Not Signed",$G1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("CS_ADHOC",$G1)))' -BackgroundColor $Orange
+            # ConditionalFormatting - IsNotarized
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("True",$H1)))' -BackgroundColor $Green
+            # ConditionalFormatting - Signature Status
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Valid",$I1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Unsigned",$I1)))' -BackgroundColor Red
+            # ConditionalFormatting - Signing Signer
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Apple",$J1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("AdHoc",$J1)))' -BackgroundColor $Orange
+            }
+        }
+    }
 
     # 11. Library Inserts
     # TODO
@@ -2715,6 +3335,33 @@ else
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/13-LoginItems.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/13-LoginItems.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/13-LoginItems.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/13-LoginItems.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/13-LoginItems.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Login Items" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:L1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and C-K
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["C:K"].Style.HorizontalAlignment="Center"
+            # ConditionalFormatting - Signing Flags
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Not Signed",$G1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("CS_ADHOC",$G1)))' -BackgroundColor $Orange
+            # ConditionalFormatting - IsNotarized
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("True",$H1)))' -BackgroundColor $Green
+            # ConditionalFormatting - Signature Status
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Valid",$I1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Unsigned",$I1)))' -BackgroundColor Red
+            # ConditionalFormatting - Signing Signer
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Apple",$J1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("AdHoc",$J1)))' -BackgroundColor $Orange
+            }
+        }
+    }
 
     # 14. Login/Logout Hooks
     # TODO
@@ -2752,6 +3399,25 @@ else
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/15-PeriodicScripts.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/15-PeriodicScripts.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/15-PeriodicScripts.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/15-PeriodicScripts.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/15-PeriodicScripts.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Periodic Scripts" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:G1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and C-G
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["C:H"].Style.HorizontalAlignment="Center"
+            # ConditionalFormatting - Signature Status
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Valid",$G1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Unsigned",$G1)))' -BackgroundColor Red
+            }
+        }
+    }
 
     # 16. Quicklook Plugins
     $Records = $Data.'Quicklook Plugins'
@@ -2845,6 +3511,31 @@ else
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/16-QuicklookPlugins.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/16-QuicklookPlugins.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/16-QuicklookPlugins.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/16-QuicklookPlugins.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/16-QuicklookPlugins.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Quicklook Plugins" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:K1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and C-J
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["C:J"].Style.HorizontalAlignment="Center"
+            # ConditionalFormatting - Signing Flags
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Not Signed",$G1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("CS_ADHOC",$G1)))' -BackgroundColor $Orange        
+            # ConditionalFormatting - Signature Status
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Valid",$H1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Unsigned",$H1)))' -BackgroundColor Red
+            # ConditionalFormatting - Signing Signer
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Apple",$I1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("AdHoc",$I1)))' -BackgroundColor $Orange
+            }
+        }
+    }
 
     # 17. Shell Configuration Files
     $Records = $Data.'Shell Configuration Files'
@@ -2881,6 +3572,24 @@ else
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/17-ShellConfigurationFiles.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/17-ShellConfigurationFiles.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/17-ShellConfigurationFiles.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/17-ShellConfigurationFiles.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/17-ShellConfigurationFiles.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Shell Configuration Files" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:H1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and C-I
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["C:I"].Style.HorizontalAlignment="Center"
+            # ConditionalFormatting - Error Name
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Unsigned",$H1)))' -FontColor Red
+            }
+        }
+    }
 
     # 18. Spotlight Importers
     $Records = $Data.'Spotlight Importers'
@@ -2974,6 +3683,31 @@ else
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/18-SpotlightImporters.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/18-SpotlightImporters.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/18-SpotlightImporters.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/18-SpotlightImporters.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/18-SpotlightImporters.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Spotlight Importers" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:K1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and C-K
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["C:K"].Style.HorizontalAlignment="Center"
+            # ConditionalFormatting - Signing Flags
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Not Signed",$G1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("CS_ADHOC",$G1)))' -BackgroundColor $Orange        
+            # ConditionalFormatting - Signature Status
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Valid",$H1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Unsigned",$H1)))' -BackgroundColor Red
+            # ConditionalFormatting - Signing Signer
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Apple",$I1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("AdHoc",$I1)))' -BackgroundColor $Orange
+            }
+        }
+    }
 
     # 19. Startup Scripts
     $Records = $Data.'Startup Scripts'
@@ -3008,6 +3742,25 @@ else
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/19-StartupScripts.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/19-StartupScripts.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/19-StartupScripts.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/19-StartupScripts.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/19-StartupScripts.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "Startup Scripts" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:G1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and C-G
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["C:G"].Style.HorizontalAlignment="Center"
+            # ConditionalFormatting - Signature Status
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Valid",$G1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Unsigned",$G1)))' -BackgroundColor Red
+            }
+        }
+    }
 
     # 20. System Extensions
     $Records = $Data.'System Extensions'
@@ -3112,6 +3865,33 @@ else
 
     $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/20-SystemExtensions.csv" -NoTypeInformation -Encoding UTF8
 
+    # XLSX
+    if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/20-SystemExtensions.csv"))
+    {
+        if(Test-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/20-SystemExtensions.csv" -MaxLines 2)
+        {
+            $IMPORT = Import-Csv "$OUTPUT_FOLDER/KnockKnock/CSV/20-SystemExtensions.csv" -Delimiter ","
+            $IMPORT | Export-Excel -Path "$OUTPUT_FOLDER/KnockKnock/XLSX/20-SystemExtensions.xlsx" -NoNumberConversion * -FreezeTopRow -BoldTopRow -AutoSize -AutoFilter -WorkSheetname "System Extensions" -CellStyleSB {
+            param($WorkSheet)
+            # BackgroundColor and FontColor for specific cells of TopRow
+            Set-Format -Address $WorkSheet.Cells["A1:L1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+            # HorizontalAlignment "Center" of columns A-A and C-K
+            $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+            $WorkSheet.Cells["C:K"].Style.HorizontalAlignment="Center"
+            # ConditionalFormatting - Signing Flags
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Not Signed",$G1)))' -BackgroundColor Red
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["G:G"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("CS_ADHOC",$G1)))' -BackgroundColor $Orange
+            # ConditionalFormatting - IsNotarized
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["H:H"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("True",$H1)))' -BackgroundColor $Green
+            # ConditionalFormatting - Signature Status
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Valid",$I1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Unsigned",$I1)))' -BackgroundColor Red
+            # ConditionalFormatting - Signing Signer
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Apple",$J1)))' -BackgroundColor $Green
+            Add-ConditionalFormatting -Address $WorkSheet.Cells["J:J"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("AdHoc",$J1)))' -BackgroundColor $Orange
+            }
+        }
+    }
 }
 
 # Categories
@@ -3240,7 +4020,7 @@ if (!($skipVT.IsPresent))
                     if (Test-Path "$PSScriptRoot/VirusTotal-Analyzer.ps1")
                     {
                         New-Item "$OUTPUT_FOLDER/VirusTotal" -ItemType Directory -Force | Out-Null
-                        & "$PSScriptRoot/VirusTotal-Analyzer.ps1" -Path "$OUTPUT_FOLDER/KnockKnock/MD5.txt" -OutputDir "$OUTPUT_FOLDER/VirusTotal"
+                        & "$PSScriptRoot/VirusTotal-Analyzer.ps1" -Path "$OUTPUT_FOLDER/KnockKnock/MD5.txt" -OutputDir "$OUTPUT_FOLDER/VirusTotal" -NoExcel:$NoExcel
                     }
                 }
             }

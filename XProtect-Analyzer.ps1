@@ -821,7 +821,7 @@ if ($Choice -eq 0)
 {
     $VTOutput = Join-Path $OUTPUT_FOLDER "VirusTotal"
     New-Item $VTOutput -ItemType Directory -Force | Out-Null
-    & $VTScript -Path $HashList -OutputDir $VTOutput
+    & $VTScript -Path $HashList -OutputDir $VTOutput -NoExcel:$NoExcel
 }
 
 }

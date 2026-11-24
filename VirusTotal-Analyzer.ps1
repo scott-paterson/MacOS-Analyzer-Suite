@@ -49,6 +49,9 @@
 .PARAMETER Path
   Specifies the path to the input file (MD5, SHA1, SHA256).
 
+.PARAMETER NoExcel
+  XLSX output is disabled by default (CSV only). To create XLSX as well, install the ImportExcel module and use -NoExcel:$false.
+
 .EXAMPLE
   PS> .\VirusTotal-Analyzer.ps1
 
@@ -73,7 +76,8 @@
 [CmdletBinding()]
 Param(
     [String]$Path,
-    [String]$OutputDir
+    [String]$OutputDir,
+    [switch]$NoExcel = $true
 )
 
 #endregion CmdletBinding
@@ -116,6 +120,13 @@ if ($PSVersionTable.PSVersion.Major -ge 6)
 {
     $script:OnWindows = $IsWindows
     $script:OnMacOS   = $IsMacOS
+}
+
+# Excel export toggle (optional)
+$script:EnableExcel = $false
+if (-not $NoExcel -and (Get-Module -ListAvailable -Name ImportExcel))
+{
+    $script:EnableExcel = $true
 }
 
 # Colors
@@ -203,6 +214,28 @@ if ($script:OnWindows -and !([Security.Principal.WindowsPrincipal] [Security.Pri
     Write-Host "Error: This PowerShell script must be run with admin rights." -ForegroundColor Red
     $Host.UI.RawUI.WindowTitle = "$DefaultWindowsTitle"
     Exit
+}
+
+# ImportExcel is optional
+if (-not $script:EnableExcel)
+{
+    if ($NoExcel)
+    {
+        if ($PSBoundParameters.ContainsKey('NoExcel'))
+        {
+            Write-Host "[Info]  -NoExcel specified. XLSX output will be skipped." -ForegroundColor Yellow
+        }
+        else
+        {
+            Write-Host "[Info]  XLSX output is disabled by default. CSV output will be created." -ForegroundColor Yellow
+            Write-Host "[Info]  To enable XLSX (optional): install ImportExcel and run with -NoExcel:`$false" -ForegroundColor Yellow
+        }
+    }
+    else
+    {
+        Write-Host "[Info]  ImportExcel not installed. XLSX output will be skipped." -ForegroundColor Yellow
+        Write-Host "[Info]  Install (optional): Install-Module -Name ImportExcel -Scope CurrentUser" -ForegroundColor Yellow
+    }
 }
 
 # Check if vt.exe exists
@@ -673,6 +706,255 @@ else
     Exit
 }
 
+
+# XLSX
+if ($script:EnableExcel)
+{
+    if (Test-Path "$OUTPUT_FOLDER/VirusTotal-Report.csv")
+    {
+        if ((Get-Item "$OUTPUT_FOLDER/VirusTotal-Report.csv").Length -gt 0kb)
+        {
+            $Import = Import-Csv "$OUTPUT_FOLDER/VirusTotal-Report.csv" -Delimiter "," -Encoding UTF8
+            $Positives = ($Import | Where-Object {$_.Positives -ne ""} | Where-Object {$_.Positives -ne "0"} | Measure-Object).Count 
+            if ($Positives -ge 1)
+            {
+                $Import | Export-Excel -Path "$OUTPUT_FOLDER/VirusTotal-Report.xlsx" -AutoSize -BoldTopRow -FreezePane 2,4 -AutoFilter -WorkSheetname "VirusTotal" -CellStyleSB {
+                param($WorkSheet)
+                # BackgroundColor and FontColor for specific cells of TopRow
+                Set-Format -Address $WorkSheet.Cells["A1:W1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+
+                # HorizontalAlignment "Center" of columns A, C-J, L-N and P-V
+                $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+                $WorkSheet.Cells["C:J"].Style.HorizontalAlignment="Center"
+                $WorkSheet.Cells["L:N"].Style.HorizontalAlignment="Center"
+                $WorkSheet.Cells["P:V"].Style.HorizontalAlignment="Center"
+
+                # HorizontalAlignment "Left" - Magic
+                $WorkSheet.Cells["K:K"].Style.HorizontalAlignment="Left"
+
+                # HorizontalAlignment "Right" - FileSize (Bytes)
+                $WorkSheet.Cells["S:S"].Style.HorizontalAlignment="Right"
+
+                # HorizontalAlignment "Center" of header
+                $WorkSheet.Cells["K1:K1"].Style.HorizontalAlignment="Center"
+                $WorkSheet.Cells["S1:S1"].Style.HorizontalAlignment="Center"
+
+                # Positives --> Conditional Formatting --> Color Scales --> Green-Yellow-Red Color Scale
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["M:M"] -WorkSheet $WorkSheet -RuleType 'ThreeColorScale' -Reverse
+
+                # No matches found. --> Grey
+                Add-ConditionalFormatting -Address $WorkSheet.Dimension.Address -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("No matches found.",$B1)))' -BackgroundColor $FileNotFoundColor
+
+                # DetectionRatio: >=1|VT --> Font: Red
+                $Cells = "N:N"
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("1/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("2/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("3/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("4/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("5/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("6/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("7/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("8/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("9/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("10/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("11/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("12/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("13/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("14/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("15/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("16/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("17/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("18/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("19/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("20/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("21/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("22/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("23/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("24/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("25/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("26/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("27/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("28/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("29/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("30/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("31/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("32/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("33/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("34/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("35/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("36/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("37/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("38/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("39/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("40/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("41/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("42/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("43/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("44/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("45/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("46/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("47/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("48/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("49/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("50/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("51/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("52/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("53/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("54/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("55/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("56/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("57/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("58/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("59/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("60/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("61/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("62/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("63/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("64/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("65/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("66/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("67/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("68/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("69/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("70/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("71/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("72/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("73/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("74/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("75/",$N1)))' -FontColor $MaliciousColor -Bold
+
+                # SignatureVerification: File is not signed --> Font: Red
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("File is not signed",$I1)))' -FontColor $MaliciousColor
+
+                # SignatureVerification: The digital signature of the object did not verify --> Font: Red
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("The digital signature of the object did not verify",$I1)))' -FontColor $MaliciousColor
+
+                # SignatureVerification: Valid (Signed file, valid signature) --> Font: Green
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Valid",$I1)))' -FontColor $Green
+
+                }
+            }
+            else
+            {
+                $Import | Export-Excel -Path "$OUTPUT_FOLDER/VirusTotal-Report.xlsx" -AutoSize -BoldTopRow -FreezePane 2,4 -AutoFilter -WorkSheetname "VirusTotal" -CellStyleSB {
+                param($WorkSheet)
+                # BackgroundColor and FontColor for specific cells of TopRow
+                Set-Format -Address $WorkSheet.Cells["A1:W1"] -BackgroundColor $BackgroundColor -FontColor $FontColor
+
+                # HorizontalAlignment "Center" of columns A, C-J, L-N and P-V
+                $WorkSheet.Cells["A:A"].Style.HorizontalAlignment="Center"
+                $WorkSheet.Cells["C:J"].Style.HorizontalAlignment="Center"
+                $WorkSheet.Cells["L:N"].Style.HorizontalAlignment="Center"
+                $WorkSheet.Cells["P:V"].Style.HorizontalAlignment="Center"
+
+                # HorizontalAlignment "Left" - Magic
+                $WorkSheet.Cells["K:K"].Style.HorizontalAlignment="Left"
+
+                # HorizontalAlignment "Right" - FileSize (Bytes)
+                $WorkSheet.Cells["S:S"].Style.HorizontalAlignment="Right"
+
+                # HorizontalAlignment "Center" of header
+                $WorkSheet.Cells["K1:K1"].Style.HorizontalAlignment="Center"
+                $WorkSheet.Cells["S1:S1"].Style.HorizontalAlignment="Center"
+
+                # Positives --> Green
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["M:M"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("0",$M1)))' -BackgroundColor $Green
+
+                # No matches found. --> Grey
+                Add-ConditionalFormatting -Address $WorkSheet.Dimension.Address -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("No matches found.",$B1)))' -BackgroundColor $FileNotFoundColor
+
+                # DetectionRatio: >=1|VT --> Font: Red
+                $Cells = "N:N"
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("1/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("2/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("3/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("4/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("5/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("6/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("7/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("8/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("9/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("10/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("11/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("12/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("13/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("14/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("15/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("16/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("17/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("18/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("19/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("20/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("21/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("22/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("23/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("24/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("25/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("26/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("27/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("28/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("29/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("30/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("31/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("32/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("33/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("34/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("35/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("36/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("37/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("38/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("39/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("40/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("41/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("42/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("43/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("44/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("45/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("46/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("47/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("48/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("49/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("50/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("51/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("52/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("53/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("54/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("55/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("56/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("57/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("58/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("59/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("60/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("61/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("62/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("63/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("64/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("65/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("66/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("67/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("68/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("69/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("70/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("71/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("72/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("73/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("74/",$N1)))' -FontColor $MaliciousColor -Bold
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["$Cells"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("75/",$N1)))' -FontColor $MaliciousColor -Bold
+
+                # SignatureVerification: File is not signed --> Font: Red
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("File is not signed",$I1)))' -FontColor $MaliciousColor
+
+                # SignatureVerification: The digital signature of the object did not verify --> Font: Red
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("The digital signature of the object did not verify",$I1)))' -FontColor $MaliciousColor
+
+                # SignatureVerification: Valid (Signed file, valid signature) --> Font: Green
+                Add-ConditionalFormatting -Address $WorkSheet.Cells["I:I"] -WorkSheet $WorkSheet -RuleType 'Expression' 'NOT(ISERROR(FIND("Valid",$I1)))' -FontColor $Green
+
+                }
+            }
+        }
+    }
+}
 
 # Stats
 if ((Test-Path "$OUTPUT_FOLDER/VirusTotal-Report.csv") -and (Get-Item "$OUTPUT_FOLDER/VirusTotal-Report.csv").Length -gt 0kb)
