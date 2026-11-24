@@ -263,6 +263,24 @@ Function script:Get-FileSize
     Else {""}
 }
 
+# Function Test-VirusTotalReachable (macOS/Linux replacement for NetworkListManager and Test-NetConnection)
+Function script:Test-VirusTotalReachable
+{
+    $Client = [System.Net.Sockets.TcpClient]::new()
+    try
+    {
+        $Client.ConnectAsync("virustotal.com", 443).Wait(5000) -and $Client.Connected
+    }
+    catch
+    {
+        $false
+    }
+    finally
+    {
+        $Client.Dispose()
+    }
+}
+
 # Select Input File (Plain Text)
 if(!($Path))
 {
@@ -467,7 +485,7 @@ if (Test-Path "$InputFile")
             $Count = (Get-Content "$File1" | Measure-Object).Count
 
             # Internet Connectivity Check (Vista+)
-            $NetworkListManager = [Activator]::CreateInstance([Type]::GetTypeFromCLSID([Guid]‘{DCB00C01-570F-4A9B-8D69-199FDBA5723B}’)).IsConnectedToInternet
+            if ($script:OnWindows) { $NetworkListManager = [Activator]::CreateInstance([Type]::GetTypeFromCLSID([Guid]‘{DCB00C01-570F-4A9B-8D69-199FDBA5723B}’)).IsConnectedToInternet } else { $NetworkListManager = Test-VirusTotalReachable }
 
             # Offline
             if (!($NetworkListManager -eq "True"))
@@ -479,7 +497,7 @@ if (Test-Path "$InputFile")
             if ($NetworkListManager -eq "True")
             {
                 # Check if VirusTotal.com is reachable
-                if ((Test-NetConnection -ComputerName virustotal.com -Port 443).TcpTestSucceeded)
+                if ($(if ($script:OnWindows) { (Test-NetConnection -ComputerName virustotal.com -Port 443).TcpTestSucceeded } else { Test-VirusTotalReachable }))
                 {
                     $EstimatedTime = $Count / 4
                     Write-Host "[Info]  Checking the first $Count Hash Value(s) on VirusTotal (Estimated Time: $EstimatedTime min) ... "
@@ -503,7 +521,7 @@ if (Test-Path "$InputFile")
         else
         {
             # Internet Connectivity Check (Vista+)
-            $NetworkListManager = [Activator]::CreateInstance([Type]::GetTypeFromCLSID([Guid]‘{DCB00C01-570F-4A9B-8D69-199FDBA5723B}’)).IsConnectedToInternet
+            if ($script:OnWindows) { $NetworkListManager = [Activator]::CreateInstance([Type]::GetTypeFromCLSID([Guid]‘{DCB00C01-570F-4A9B-8D69-199FDBA5723B}’)).IsConnectedToInternet } else { $NetworkListManager = Test-VirusTotalReachable }
 
             # Offline
             if (!($NetworkListManager -eq "True"))
@@ -515,7 +533,7 @@ if (Test-Path "$InputFile")
             if ($NetworkListManager -eq "True")
             {
                 # Check if VirusTotal.com is reachable
-                if ((Test-NetConnection -ComputerName virustotal.com -Port 443).TcpTestSucceeded)
+                if ($(if ($script:OnWindows) { (Test-NetConnection -ComputerName virustotal.com -Port 443).TcpTestSucceeded } else { Test-VirusTotalReachable }))
                 {
                     $EstimatedTime = $Lines / 4
                     Write-Host "[Info]  Checking Hash Value(s) on VirusTotal (Estimated Time: $EstimatedTime min) ... "
