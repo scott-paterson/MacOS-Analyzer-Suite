@@ -158,6 +158,10 @@ else
     }
 }
 
+# Export-Csv: @CsvArgs is required on Windows PowerShell 5.1 and obsolete (warns) on PowerShell 7.4+
+$script:CsvArgs = @{}
+if ($PSVersionTable.PSVersion.Major -lt 6) { $script:CsvArgs.NoTypeInformation = $true }
+
 # Detect Operating System
 # NOTE: Do NOT use names like IsWindows/IsMacOS/IsLinux here because PowerShell defines read-only automatic variables with those names.
 $script:OnWindows = $true
@@ -948,7 +952,7 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/1-AuthorizationPlugins.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/1-AuthorizationPlugins.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/1-AuthorizationPlugins.csv"))
@@ -1079,7 +1083,7 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/2-BackgroundManagedTasks.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/2-BackgroundManagedTasks.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/2-BackgroundManagedTasks.csv"))
@@ -1129,7 +1133,7 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/3-BrowserExtensions.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/3-BrowserExtensions.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/3-BrowserExtensions.csv"))
@@ -1161,7 +1165,7 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/4-CronJobs.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/4-CronJobs.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/4-CronJobs.csv"))
@@ -1264,7 +1268,7 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/6-DockTilesPlugins.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/6-DockTilesPlugins.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/6-DockTilesPlugins.csv"))
@@ -1394,7 +1398,7 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/8-ExtensionsWidgets.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/8-ExtensionsWidgets.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/8-ExtensionsWidgets.csv"))
@@ -1530,7 +1534,7 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/9-KernelExtensions.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/9-KernelExtensions.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/9-KernelExtensions.csv"))
@@ -1666,7 +1670,7 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/10-LaunchItems.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/10-LaunchItems.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/10-LaunchItems.csv"))
@@ -1808,7 +1812,7 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/13-LoginItems.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/13-LoginItems.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/13-LoginItems.csv"))
@@ -1877,7 +1881,7 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/15-PeriodicScripts.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/15-PeriodicScripts.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/15-PeriodicScripts.csv"))
@@ -1994,7 +1998,7 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/16-QuicklookPlugins.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/16-QuicklookPlugins.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/16-QuicklookPlugins.csv"))
@@ -2060,7 +2064,7 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/17-ShellConfigurationFiles.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/17-ShellConfigurationFiles.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/17-ShellConfigurationFiles.csv"))
@@ -2176,7 +2180,7 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/18-SpotlightImporters.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/18-SpotlightImporters.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/18-SpotlightImporters.csv"))
@@ -2240,7 +2244,7 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/19-StartupScripts.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/19-StartupScripts.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/19-StartupScripts.csv"))
@@ -2368,7 +2372,7 @@ if (Get-Content "$LogFile" | Select-String -Pattern "VT detection" -CaseSensitiv
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/20-SystemExtensions.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/20-SystemExtensions.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/20-SystemExtensions.csv"))
@@ -2496,7 +2500,7 @@ else
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/1-AuthorizationPlugins.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/1-AuthorizationPlugins.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/1-AuthorizationPlugins.csv"))
@@ -2622,7 +2626,7 @@ else
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/2-BackgroundManagedTasks.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/2-BackgroundManagedTasks.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/2-BackgroundManagedTasks.csv"))
@@ -2668,7 +2672,7 @@ else
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/3-BrowserExtensions.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/3-BrowserExtensions.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/3-BrowserExtensions.csv"))
@@ -2700,7 +2704,7 @@ else
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/4-CronJobs.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/4-CronJobs.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/4-CronJobs.csv"))
@@ -2809,7 +2813,7 @@ else
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/6-DockTilesPlugins.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/6-DockTilesPlugins.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/6-DockTilesPlugins.csv"))
@@ -2934,7 +2938,7 @@ else
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/8-ExtensionsWidgets.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/8-ExtensionsWidgets.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/8-ExtensionsWidgets.csv"))
@@ -3065,7 +3069,7 @@ else
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/9-KernelExtensions.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/9-KernelExtensions.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/9-KernelExtensions.csv"))
@@ -3196,7 +3200,7 @@ else
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/10-LaunchItems.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/10-LaunchItems.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/10-LaunchItems.csv"))
@@ -3333,7 +3337,7 @@ else
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/13-LoginItems.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/13-LoginItems.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/13-LoginItems.csv"))
@@ -3397,7 +3401,7 @@ else
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/15-PeriodicScripts.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/15-PeriodicScripts.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/15-PeriodicScripts.csv"))
@@ -3509,7 +3513,7 @@ else
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/16-QuicklookPlugins.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/16-QuicklookPlugins.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/16-QuicklookPlugins.csv"))
@@ -3570,7 +3574,7 @@ else
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/17-ShellConfigurationFiles.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/17-ShellConfigurationFiles.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/17-ShellConfigurationFiles.csv"))
@@ -3681,7 +3685,7 @@ else
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/18-SpotlightImporters.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/18-SpotlightImporters.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/18-SpotlightImporters.csv"))
@@ -3740,7 +3744,7 @@ else
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/19-StartupScripts.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/19-StartupScripts.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/19-StartupScripts.csv"))
@@ -3863,7 +3867,7 @@ else
         $Results.Add($Line)
     }
 
-    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/20-SystemExtensions.csv" -NoTypeInformation -Encoding UTF8
+    $Results | Export-Csv -Path "$OUTPUT_FOLDER/KnockKnock/CSV/20-SystemExtensions.csv" @CsvArgs -Encoding UTF8
 
     # XLSX
     if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/KnockKnock/CSV/20-SystemExtensions.csv"))

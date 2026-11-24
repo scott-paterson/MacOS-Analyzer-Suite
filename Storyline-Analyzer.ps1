@@ -149,18 +149,11 @@ if (-not $NoExcel -and (Get-Module -ListAvailable -Name ImportExcel))
     $script:EnableExcel = $true
 }
 
-# Colors / Styling (only supported on Windows)
-$script:UseExcelStyling = $false
-if ($script:OnWindows)
-{
-    Add-Type -AssemblyName System.Drawing
-    $script:Green  = [System.Drawing.Color]::FromArgb(0,176,80)
-    $script:Orange = [System.Drawing.Color]::FromArgb(255,192,0)
-    if ($script:EnableExcel)
-    {
-        $script:UseExcelStyling = $true
-    }
-}
+# Colors / Styling (XLSX only)
+Add-Type -AssemblyName System.Drawing
+$script:Green  = [System.Drawing.Color]::FromArgb(0,176,80)
+$script:Orange = [System.Drawing.Color]::FromArgb(255,192,0)
+$script:UseExcelStyling = [bool]$script:EnableExcel
 
 # Output Directory
 if (!($OutputDir))

@@ -3,6 +3,8 @@
 # MacOS-Analyzer-Suite
 A collection of PowerShell scripts for analyzing macOS Forensic Artifacts
 
+> **Fork note (scott-paterson/MacOS-Analyzer-Suite):** this fork adds native macOS support (PowerShell 7) to every analyzer and fixes several parsing bugs. Output is CSV by default; XLSX is opt-in (`-NoExcel:$false` with ImportExcel installed). See [MACOS-SETUP.md](MACOS-SETUP.md) for setup and usage, and the [CHANGELOG](CHANGELOG.md) for what changed. Scripts modified in this fork are **not** digitally signed; the upstream signatures no longer apply.
+
 ## The following MacOS Forensic Artifacts are supported yet:
 
   * Aftermath Storyline &#8594; Storyline-Analyzer

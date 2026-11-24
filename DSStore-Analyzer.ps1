@@ -118,6 +118,10 @@ else
     $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Definition
 }
 
+# Export-Csv: @CsvArgs is required on Windows PowerShell 5.1 and obsolete (warns) on PowerShell 7.4+
+$script:CsvArgs = @{}
+if ($PSVersionTable.PSVersion.Major -lt 6) { $script:CsvArgs.NoTypeInformation = $true }
+
 # Detect Operating System
 # NOTE: Do NOT use names like IsWindows/IsMacOS/IsLinux here because PowerShell defines read-only automatic variables with those names.
 $script:OnWindows = $false
@@ -143,19 +147,12 @@ if (-not $NoExcel -and (Get-Module -ListAvailable -Name ImportExcel))
     $script:EnableExcel = $true
 }
 
-# Colors / Styling (only supported on Windows)
-$script:UseExcelStyling = $false
-if ($script:OnWindows)
-{
-    Add-Type -AssemblyName System.Drawing
-    $script:Green  = [System.Drawing.Color]::FromArgb(0,176,80) # Green
-    $script:Orange = [System.Drawing.Color]::FromArgb(255,192,0) # Orange
+# Colors / Styling (XLSX only)
+Add-Type -AssemblyName System.Drawing
+$script:Green  = [System.Drawing.Color]::FromArgb(0,176,80) # Green
+$script:Orange = [System.Drawing.Color]::FromArgb(255,192,0) # Orange
 
-    if ($script:EnableExcel)
-    {
-        $script:UseExcelStyling = $true
-    }
-}
+$script:UseExcelStyling = [bool]$script:EnableExcel
 
 # Output Directory
 if (!($OutputDir))
@@ -591,7 +588,7 @@ Function Invoke-DSStoreInventory {
     }
 
     $inventoryCsv = Join-Path $csvDir "DSStoreFiles.csv"
-    $results | Export-Csv -Path $inventoryCsv -NoTypeInformation -Encoding UTF8
+    $results | Export-Csv -Path $inventoryCsv @CsvArgs -Encoding UTF8
     Write-Output "[Info]  Wrote: $inventoryCsv"
 
     if ($script:EnableExcel -and (Test-Path $inventoryCsv))
@@ -687,7 +684,7 @@ if (Test-Path "$OUTPUT_FOLDER\DSStoreParser\Reports\TSV\$All_Parsed_Report.tsv")
         $IMPORT = Import-Csv "$OUTPUT_FOLDER\DSStoreParser\Reports\TSV\$All_Parsed_Report.tsv" -Delimiter "`t" -Encoding UTF8
 
         # CSV (always)
-        $IMPORT | Export-Csv -Path "$OUTPUT_FOLDER\DSStoreParser\Reports\CSV\All_Parsed_Report.csv" -NoTypeInformation -Encoding UTF8
+        $IMPORT | Export-Csv -Path "$OUTPUT_FOLDER\DSStoreParser\Reports\CSV\All_Parsed_Report.csv" @CsvArgs -Encoding UTF8
 
         # XLSX (optional)
         if ($script:EnableExcel)
@@ -725,7 +722,7 @@ if (Test-Path "$OUTPUT_FOLDER\DSStoreParser\Reports\TSV\$All_Parsed_Report.tsv")
     if([int](& $xsv count -d "`t" "$OUTPUT_FOLDER\DSStoreParser\Reports\TSV\$Access_Report.tsv") -gt 0)
     {
         $IMPORT = Import-Csv "$OUTPUT_FOLDER\DSStoreParser\Reports\TSV\$Access_Report.tsv" -Delimiter "`t" -Encoding UTF8
-        $IMPORT | Export-Csv -Path "$OUTPUT_FOLDER\DSStoreParser\Reports\CSV\Access_Report.csv" -NoTypeInformation -Encoding UTF8
+        $IMPORT | Export-Csv -Path "$OUTPUT_FOLDER\DSStoreParser\Reports\CSV\Access_Report.csv" @CsvArgs -Encoding UTF8
 
         if ($script:EnableExcel)
         {
@@ -753,7 +750,7 @@ if (Test-Path "$OUTPUT_FOLDER\DSStoreParser\Reports\TSV\$Miscellaneous_Info_Repo
     if([int](& $xsv count -d "`t" "$OUTPUT_FOLDER\DSStoreParser\Reports\TSV\$Miscellaneous_Info_Report.tsv") -gt 0)
     {
         $IMPORT = Import-Csv "$OUTPUT_FOLDER\DSStoreParser\Reports\TSV\$Miscellaneous_Info_Report.tsv" -Delimiter "`t" -Encoding UTF8
-        $IMPORT | Export-Csv -Path "$OUTPUT_FOLDER\DSStoreParser\Reports\CSV\Miscellaneous_Info_Report.csv" -NoTypeInformation -Encoding UTF8
+        $IMPORT | Export-Csv -Path "$OUTPUT_FOLDER\DSStoreParser\Reports\CSV\Miscellaneous_Info_Report.csv" @CsvArgs -Encoding UTF8
 
         if ($script:EnableExcel)
         {
@@ -808,7 +805,7 @@ $Total = ($Data | Select-Object record_type | Measure-Object).Count
 if ($Total -ge "1")
 {
     $Stats = $Data | Group-Object record_type | Select-Object @{Name='Record Type'; Expression={if($_.Name){$_.Name}else{'N/A'}}},Count,@{Name='PercentUse'; Expression={"{0:p2}" -f ($_.Count / $Total)}} | Sort-Object Count -Descending
-    $Stats | Export-Csv -Path "$OUTPUT_FOLDER\DSStoreParser\Stats\RecordType.csv" -NoTypeInformation -Encoding UTF8
+    $Stats | Export-Csv -Path "$OUTPUT_FOLDER\DSStoreParser\Stats\RecordType.csv" @CsvArgs -Encoding UTF8
 
     if ($script:EnableExcel)
     {

@@ -112,6 +112,10 @@ else
     $script:SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Definition
 }
 
+# Export-Csv: @CsvArgs is required on Windows PowerShell 5.1 and obsolete (warns) on PowerShell 7.4+
+$script:CsvArgs = @{}
+if ($PSVersionTable.PSVersion.Major -lt 6) { $script:CsvArgs.NoTypeInformation = $true }
+
 # Detect Operating System
 # NOTE: Do NOT use names like IsWindows/IsMacOS/IsLinux here because PowerShell defines read-only automatic variables with those names.
 $script:OnWindows = $true
@@ -694,7 +698,7 @@ if (Test-Path "$InputFile")
             "Code Insights" = $CodeInsights
             })
 
-        } | ConvertTo-Csv -Delimiter "," -NoTypeInformation | Out-File "$OUTPUT_FOLDER/VirusTotal-Report.csv"
+        } | ConvertTo-Csv -Delimiter "," @CsvArgs | Out-File "$OUTPUT_FOLDER/VirusTotal-Report.csv"
     }
 }
 else

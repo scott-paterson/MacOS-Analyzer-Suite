@@ -125,6 +125,10 @@ else
     $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Definition
 }
 
+# Export-Csv: @CsvArgs is required on Windows PowerShell 5.1 and obsolete (warns) on PowerShell 7.4+
+$script:CsvArgs = @{}
+if ($PSVersionTable.PSVersion.Major -lt 6) { $script:CsvArgs.NoTypeInformation = $true }
+
 # Detect Operating System
 # NOTE: Do NOT use names like IsWindows/IsMacOS/IsLinux here because PowerShell defines read-only automatic variables with those names.
 $script:OnWindows = $false
@@ -150,18 +154,11 @@ if (-not $NoExcel -and (Get-Module -ListAvailable -Name ImportExcel))
     $script:EnableExcel = $true
 }
 
-# Colors / Styling (only supported on Windows)
-$script:UseExcelStyling = $false
-if ($script:OnWindows)
-{
-    Add-Type -AssemblyName System.Drawing
-    $script:Green  = [System.Drawing.Color]::FromArgb(0,176,80)
-    $script:Orange = [System.Drawing.Color]::FromArgb(255,192,0)
-    if ($script:EnableExcel)
-    {
-        $script:UseExcelStyling = $true
-    }
-}
+# Colors / Styling (XLSX only)
+Add-Type -AssemblyName System.Drawing
+$script:Green  = [System.Drawing.Color]::FromArgb(0,176,80)
+$script:Orange = [System.Drawing.Color]::FromArgb(255,192,0)
+$script:UseExcelStyling = [bool]$script:EnableExcel
 
 # Output Directory
 if (!($OutputDir))
@@ -614,7 +611,7 @@ ForEach($Record in $Results)
     $Output.Add($Line)
 }
 
-$Output | Export-Csv -Path "$OUTPUT_FOLDER/CSV/XProtect-BehaviorService.csv" -NoTypeInformation -Encoding UTF8
+$Output | Export-Csv -Path "$OUTPUT_FOLDER/CSV/XProtect-BehaviorService.csv" @CsvArgs -Encoding UTF8
 
 # XLSX
 if ($script:EnableExcel -and $Output.Count -ge 1)
@@ -669,7 +666,7 @@ Function script:Export-Stats {
     }
     else
     {
-        $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/$Name.csv" -NoTypeInformation -Encoding UTF8
+        $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/$Name.csv" @CsvArgs -Encoding UTF8
     }
 }
 

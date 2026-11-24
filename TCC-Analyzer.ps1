@@ -129,6 +129,10 @@ else
     $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Definition
 }
 
+# Export-Csv: @CsvArgs is required on Windows PowerShell 5.1 and obsolete (warns) on PowerShell 7.4+
+$script:CsvArgs = @{}
+if ($PSVersionTable.PSVersion.Major -lt 6) { $script:CsvArgs.NoTypeInformation = $true }
+
 # Detect Operating System
 # NOTE: Do NOT use names like IsWindows/IsMacOS/IsLinux here because PowerShell defines read-only automatic variables with those names.
 $script:OnWindows = $false
@@ -154,18 +158,11 @@ if (-not $NoExcel -and (Get-Module -ListAvailable -Name ImportExcel))
     $script:EnableExcel = $true
 }
 
-# Colors / Styling (only supported on Windows)
-$script:UseExcelStyling = $false
-if ($script:OnWindows)
-{
-    Add-Type -AssemblyName System.Drawing
-    $script:Green  = [System.Drawing.Color]::FromArgb(0,176,80)
-    $script:Orange = [System.Drawing.Color]::FromArgb(255,192,0)
-    if ($script:EnableExcel)
-    {
-        $script:UseExcelStyling = $true
-    }
-}
+# Colors / Styling (XLSX only)
+Add-Type -AssemblyName System.Drawing
+$script:Green  = [System.Drawing.Color]::FromArgb(0,176,80)
+$script:Orange = [System.Drawing.Color]::FromArgb(255,192,0)
+$script:UseExcelStyling = [bool]$script:EnableExcel
 
 # Output Directory
 if (!($OutputDir))
@@ -699,7 +696,7 @@ ForEach($Record in $Data)
     $Results.Add($Line)
 }
 
-$Results | Export-Csv -Path "$OUTPUT_FOLDER/CSV/TCC.csv" -NoTypeInformation -Encoding UTF8
+$Results | Export-Csv -Path "$OUTPUT_FOLDER/CSV/TCC.csv" @CsvArgs -Encoding UTF8
 
 # XLSX
 if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/CSV/TCC.csv"))
@@ -749,7 +746,9 @@ Function Get-AppInfo {
 # Check Internet connectivity
 if ($script:OnMacOS -or $script:OnLinux)
 {
-    $Connected = Test-Connection -ComputerName "itunes.apple.com" -Count 1 -Quiet -ErrorAction SilentlyContinue
+    # TCP 443 rather than ping: ICMP is often blocked on networks that allow HTTPS
+    $Client = [System.Net.Sockets.TcpClient]::new()
+    try { $Connected = $Client.ConnectAsync("itunes.apple.com", 443).Wait(5000) -and $Client.Connected } catch { $Connected = $false } finally { $Client.Dispose() }
 }
 else
 {
@@ -835,7 +834,7 @@ if ($Connected -eq $true)
             $Results.Add($Line)
         }
 
-        $Results | Export-Csv -Path "$OUTPUT_FOLDER/CSV/TCC_iTunes.csv" -NoTypeInformation -Encoding UTF8
+        $Results | Export-Csv -Path "$OUTPUT_FOLDER/CSV/TCC_iTunes.csv" @CsvArgs -Encoding UTF8
 
         # XLSX
         if ($script:EnableExcel -and (Test-Path "$OUTPUT_FOLDER/CSV/TCC_iTunes.csv"))
@@ -899,7 +898,7 @@ if (Test-Path "$OUTPUT_FOLDER/CSV/TCC.csv")
         }
         else
         {
-            $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/Client.csv" -NoTypeInformation -Encoding UTF8
+            $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/Client.csv" @CsvArgs -Encoding UTF8
         }
     }
 
@@ -920,7 +919,7 @@ if (Test-Path "$OUTPUT_FOLDER/CSV/TCC.csv")
         }
         else
         {
-            $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/Service.csv" -NoTypeInformation -Encoding UTF8
+            $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/Service.csv" @CsvArgs -Encoding UTF8
         }
     }
 
@@ -941,7 +940,7 @@ if (Test-Path "$OUTPUT_FOLDER/CSV/TCC.csv")
         }
         else
         {
-            $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/AuthorizationValue.csv" -NoTypeInformation -Encoding UTF8
+            $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/AuthorizationValue.csv" @CsvArgs -Encoding UTF8
         }
     }
 
@@ -962,7 +961,7 @@ if (Test-Path "$OUTPUT_FOLDER/CSV/TCC.csv")
         }
         else
         {
-            $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/AuthorizationReason.csv" -NoTypeInformation -Encoding UTF8
+            $Stats | Export-Csv -Path "$OUTPUT_FOLDER/Stats/AuthorizationReason.csv" @CsvArgs -Encoding UTF8
         }
     }
 }
