@@ -28,7 +28,7 @@ XLSX output is **disabled by default**.
 - If you want **CSV-only** (recommended): do nothing.
 - If you want **XLSX output** (optional): install ImportExcel and run with `-NoExcel:$false`.
 
-`KnockKnock-Analyzer.ps1` and `VirusTotal-Analyzer.ps1` are the exception: they **require** ImportExcel, because their main reports are XLSX. Column auto-sizing on macOS also needs `brew install mono-libgdiplus`; without it the reports are still written, just with default column widths.
+`KnockKnock-Analyzer.ps1` and `VirusTotal-Analyzer.ps1` write CSV only and never need ImportExcel.
 
 ### 3. System Tools
 
@@ -57,8 +57,8 @@ For VirusTotal lookups, put your API key in `Config.json` under `VirusTotal.APIK
 | BTM-Analyzer.ps1 | ✅ Full | Works natively |
 | Timeline-Analyzer.ps1 | ✅ Full | Works natively |
 | Storyline-Analyzer.ps1 | ✅ Full | Works natively |
-| KnockKnock-Analyzer.ps1 | ✅ Full | Requires ImportExcel and jq |
-| VirusTotal-Analyzer.ps1 | ✅ Full | Requires ImportExcel, `vt`, `yq`, and an API key |
+| KnockKnock-Analyzer.ps1 | ✅ Full | CSV only. Requires jq |
+| VirusTotal-Analyzer.ps1 | ✅ Full | CSV only. Requires `vt`, `yq`, and an API key |
 | DSStore-Analyzer.ps1 | ⚠️ Partial | Requires DSStoreParser (see below) |
 | FSEvents-Analyzer.ps1 | ⚠️ Partial | Python parser works; Rust parser is Windows-only |
 
